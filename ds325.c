@@ -113,7 +113,7 @@ devmap(int fd, uchar ***bufp, int **lenp, int *nbufp)
 	int nbufs;
 	int i;
 
-	req.count = 4; //16;
+	req.count = 2; //16;
 	req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	req.memory = V4L2_MEMORY_MMAP;
 
@@ -288,7 +288,7 @@ devinput(int fd, uchar **bufs, int *lens)
 	bufd->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	bufd->memory = V4L2_MEMORY_MMAP;
 
-	if(ioctl(fd, VIDIOC_DQBUF, bufd) == -1){
+	if((r = ioctl(fd, VIDIOC_DQBUF, bufd)) == -1){
 		warn("devinput: VIDIOC_DQBUF, fd %d", fd);
 		return;
 	}
@@ -308,8 +308,7 @@ devinput(int fd, uchar **bufs, int *lens)
 	work->len = lens[bufd->index];
 
 	//if((r = pthread_join(workthr, NULL)) != 0)
-	//	;
-
+		;
 	workup = 1;
 	//pthread_create(&workthr, NULL, devwork, work);
 	devwork(work);
@@ -420,12 +419,12 @@ init_cmd(int fd, int send_num)
 		UVC_SET_CUR, 0x12, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, // optional
 
 		UVC_SET_CUR, 0x12, 0x11, 0x00, 0xe0, 0x02, 0x00, 0x00, // orig: 480 (0xe0, 0x01) weird shit without. needs to be >= 8. funny specks if very small?
-		UVC_SET_CUR, 0x12, 0x12, 0x00, 0x04, 0x00, 0x00, 0x00, // orig: 0x04, 0x00 frame rate select. 120fps/x (?), 4 is 30fps.
+		UVC_SET_CUR, 0x12, 0x12, 0x00, 0x02, 0x00, 0x00, 0x00, // orig: 0x02, 0x00 frame rate select. 120fps/x (?), 4 is 30fps.
 
 		UVC_SET_CUR, 0x12, 0x1a, 0x00, 0x00, 0x14, 0x00, 0x00, // matches the one later? optional
 
 		UVC_SET_CUR, 0x12, 0x33, 0x00, 0xf0, 0x70, 0x00, 0x00, // messes up image, weird ass bands?
-		UVC_SET_CUR, 0x12, 0x4a, 0x00, 0x02, 0x00, 0x00, 0x00, // optional
+		UVC_SET_CUR, 0x12, 0x4a, 0x00, 0x02, 0x00, 0x00, 0x00, 
 
 		UVC_SET_CUR, 0x12, 0x1a, 0x00, 0x80, 0x14, 0x00, 0x00, // optional
 		UVC_SET_CUR, 0x12, 0x1a, 0x00, 0xc0, 0x14, 0x00, 0x00, // 0xc0, 0x14 default, important
@@ -483,11 +482,11 @@ main(void)
 	x11_fd = x11init();
 
 	color_fd = -1;
-	color_fd = devopen("/dev/video0", 30);
+	color_fd = devopen("/dev/video0", 60);
 	devmap(color_fd, &color_bufs, &color_buf_lens, &ncolor_bufs);
 	devstart(color_fd);
 
-	depth_fd = devopen("/dev/video1", 30);
+	depth_fd = devopen("/dev/video1", 60);
 	devmap(depth_fd, &depth_bufs, &depth_buf_lens, &ndepth_bufs);
 	devstart(depth_fd);
 
@@ -527,22 +526,26 @@ main(void)
 				off++;
 			}
 			devinput(depth_fd, depth_bufs, depth_buf_lens);
+/*
 			et0 = tsec();
 			fps0 = 0.95*fps0 + 0.05*(1.0/(et0-st0));
-			//fprintf(stderr, "depth fps %f\n", fps0);
+			fprintf(stderr, "depth fps %f\n", fps0);
 			st0 = et0;
+*/
 		}
 
 		if(color_fd != -1 && FD_ISSET(color_fd, &rset)){
 			devinput(color_fd, color_bufs, color_buf_lens);
+/*
 			et1 = tsec();
 			fps1 = 0.95*fps1 + 0.05*(1.0/(et1-st1));
-			//fprintf(stderr, "color fps %f\n", fps1);
+			fprintf(stderr, "color fps %f\n", fps1);
 			st1 = et1;
+*/
 		}
 
 		//tcpserve(&rset, &wset);
-		if(x11_fd != -1 && FD_ISSET(x11_fd, &rset))
+		if(x11_fd != -1) // && FD_ISSET(x11_fd, &rset))
 			x11serve(x11_fd);
 
 	}

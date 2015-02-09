@@ -6,7 +6,7 @@ OBJS=\
 	x11.o\
 
 ds325: $(OBJS)
-	$(CC) -o $@ $(OBJS) -lX11 -lm -lpthread
+	$(CC) -o $@ $(OBJS) -lX11 -lXext -lm -lpthread -lturbojpeg
 
 clean:
 	rm -f *.o ds325
