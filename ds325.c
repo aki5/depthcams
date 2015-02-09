@@ -483,9 +483,9 @@ main(void)
 	x11_fd = x11init();
 
 	color_fd = -1;
-	//color_fd = devopen("/dev/video0", 30);
-	//devmap(color_fd, &color_bufs, &color_buf_lens, &ncolor_bufs);
-	//devstart(color_fd);
+	color_fd = devopen("/dev/video0", 30);
+	devmap(color_fd, &color_bufs, &color_buf_lens, &ncolor_bufs);
+	devstart(color_fd);
 
 	depth_fd = devopen("/dev/video1", 30);
 	devmap(depth_fd, &depth_bufs, &depth_buf_lens, &ndepth_bufs);
