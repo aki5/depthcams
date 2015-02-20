@@ -8,8 +8,6 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-#include <pthread.h>
-
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <asm/types.h>
@@ -25,6 +23,9 @@
 int color_fd;
 int depth_fd;
 int x11_fd;
+
+int dflag;
+int cflag;
 
 double
 tsec(void)
@@ -426,7 +427,7 @@ init_cmd(int fd, int send_num)
 }
 
 int
-main(void)
+main(int argc, char *argv[])
 {
 	uchar **color_bufs;
 	uchar **depth_bufs;
@@ -434,17 +435,37 @@ main(void)
 	int *depth_buf_lens;
 	int ncolor_bufs;
 	int ndepth_bufs;
+	int opt;
+
+	while((opt = getopt(argc, argv, "dc")) != -1){
+		switch (opt) {
+		case 'c':
+			cflag = 1;
+			break;
+		case 'd':
+			dflag = 1;
+			break;
+		default: /* '?' */
+			fprintf(stderr, "Usage: %s [-dc]\nn", argv[0]);
+			exit(1);
+		}
+	}
 
 	x11_fd = x11init();
 
 	color_fd = -1;
-	color_fd = devopen("/dev/video0", 15);
-	devmap(color_fd, &color_bufs, &color_buf_lens, &ncolor_bufs);
-	devstart(color_fd);
+	if(!cflag){
+		color_fd = devopen("/dev/video0", 30);
+		devmap(color_fd, &color_bufs, &color_buf_lens, &ncolor_bufs);
+		devstart(color_fd);
+	}
 
-	depth_fd = devopen("/dev/video1", 25);
-	devmap(depth_fd, &depth_bufs, &depth_buf_lens, &ndepth_bufs);
-	devstart(depth_fd);
+	depth_fd = -1;
+	if(!dflag){
+		depth_fd = devopen("/dev/video1", 60);
+		devmap(depth_fd, &depth_bufs, &depth_buf_lens, &ndepth_bufs);
+		devstart(depth_fd);
+	}
 
 	for(;;){
 		struct timeval tv;

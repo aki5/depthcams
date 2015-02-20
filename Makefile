@@ -4,7 +4,6 @@ LIBS=\
 	-lX11\
 	 -lXext\
 	 -lm\
-	 -lpthread\
 	 -lturbojpeg\
 
 OBJS=\

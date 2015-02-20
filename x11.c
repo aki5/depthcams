@@ -282,8 +282,6 @@ x11init(void)
  	tjdec = tjInitDecompress();
 	//tjDestroy(tjdec);
 
-	XInitThreads();
-
 	if((display = XOpenDisplay(NULL)) == NULL){
 		fprintf(stderr, "cannot open display!\n");
 		return 1;
