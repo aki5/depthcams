@@ -90,17 +90,6 @@ devopen(char *name, int fps)
 	ioctl(fd, VIDIOC_G_PARM, &sparm);
 	fprintf(stderr, "get fps:  %d\n", sparm.parm.capture.timeperframe.denominator);
 
-/*
-	struct v4l2_format fmt;
-	memset(&fmt, 0, sizeof fmt);
-	fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	fmt.fmt.pix.width = width;
-	fmt.fmt.pix.height = height;
-	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
-	fmt.fmt.pix.field = V4L2_FIELD_INTERLACED;
-	if(ioctl(fd, VIDIOC_S_FMT, &fmt) == -1)
-		fatal("ioctl %s: VIDIOC_S_FMT", name);
-*/
 	return fd;
 }
 
@@ -238,7 +227,7 @@ devwork(void *arg)
 	int fd, len;
 
 	work = (Bufwork*)arg;
-	buf = work->buf;//bufs[bufd->index];
+	buf = work->buf;
 	bufd = &work->bufd;
 	fd = work->fd;
 	len = work->len;
@@ -252,6 +241,8 @@ devwork(void *arg)
 		int buflen, jpeglen;
 		buflen = len;
 		jpeglen = parsejpeg(buf, buflen);
+
+fprintf(stderr, "jpeglen %d\n", jpeglen);
 
 		if(0)fprintf(stderr,
 			"jpeglen %x/%x, past:"
@@ -296,32 +287,29 @@ devinput(int fd, uchar **bufs, int *lens)
 		return;
 	}
 
-	work->badframe = 0;
-	if(fd == depth_fd){
-		static int prevseq;
-		fprintf(stderr,
-			"bufd index %d "
-			"type %d "
-			"flag %x "
-			"field %d "
-			"seq %d "
-			"bytes %d "
-			"\n",
-			bufd->index,
-			bufd->type,
-			bufd->flags,
-			bufd->field,
-			bufd->sequence-prevseq,
-			bufd->bytesused
-		);
-		if(bufd->bytesused != 307200)
-			work->badframe = 1;
-		prevseq = bufd->sequence;
-	}
-	if(bufd->flags & V4L2_BUF_FLAG_ERROR)
-		fprintf(stderr, "error flag set\n");
-	if(bufd->flags & V4L2_BUF_FLAG_DONE)
-		fprintf(stderr, "done flag set\n");
+/*
+	const char *flagstr[] = {
+		"V4L2_BUF_FLAG_MAPPED",
+		"V4L2_BUF_FLAG_QUEUED",
+		"V4L2_BUF_FLAG_DONE",
+		"V4L2_BUF_FLAG_KEYFRAME",
+		"V4L2_BUF_FLAG_PFRAME",
+		"V4L2_BUF_FLAG_BFRAME",
+		"V4L2_BUF_FLAG_ERROR",
+		"V4L2_BUF_FLAG_UNKNOWN",
+		"V4L2_BUF_FLAG_TIMECODE",
+		"V4L2_BUF_FLAG_INPUT",
+		"V4L2_BUF_FLAG_PREPARED",
+		"V4L2_BUF_FLAG_NO_CACHE_INVALIDATE",
+		"V4L2_BUF_FLAG_NO_CACHE_CLEAN",
+	};
+	printf("flags ");
+	int j;
+	for(j = 0; j < nelem(flagstr); j++)
+		if(bufd->flags & (1<<j))
+			printf(" %s", flagstr[j]);
+	printf("\n");
+*/
 
 	work->fd = fd;
 	work->buf = bufs[bufd->index];
@@ -484,7 +472,7 @@ init_cmd(int fd, int send_num)
 }
 
 int
-main(void)
+main(int argc, char *argv[])
 {
 	double st0, et0, fps0;
 	double st1, et1, fps1;
@@ -498,11 +486,11 @@ main(void)
 	x11_fd = x11init();
 
 	color_fd = -1;
-	color_fd = devopen("/dev/video0", 30);
+	color_fd = devopen("/dev/video0", 15);
 	devmap(color_fd, &color_bufs, &color_buf_lens, &ncolor_bufs);
 	devstart(color_fd);
 
-	depth_fd = devopen("/dev/video1", 60);
+	depth_fd = devopen("/dev/video1", 25);
 	devmap(depth_fd, &depth_bufs, &depth_buf_lens, &ndepth_bufs);
 	devstart(depth_fd);
 
@@ -542,25 +530,12 @@ main(void)
 				off++;
 			}
 			devinput(depth_fd, depth_bufs, depth_buf_lens);
-/*
-			et0 = tsec();
-			fps0 = 0.95*fps0 + 0.05*(1.0/(et0-st0));
-			fprintf(stderr, "depth fps %f\n", fps0);
-			st0 = et0;
-*/
 		}
 
 		if(color_fd != -1 && FD_ISSET(color_fd, &rset)){
 			devinput(color_fd, color_bufs, color_buf_lens);
-/*
-			et1 = tsec();
-			fps1 = 0.95*fps1 + 0.05*(1.0/(et1-st1));
-			fprintf(stderr, "color fps %f\n", fps1);
-			st1 = et1;
-*/
 		}
 
-		//tcpserve(&rset, &wset);
 		if(x11_fd != -1) // && FD_ISSET(x11_fd, &rset))
 			x11serve(x11_fd);
 
