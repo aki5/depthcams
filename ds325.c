@@ -80,6 +80,10 @@ devopen(char *name, int fps)
 	if((cap.capabilities & needcaps) != needcaps)
 		fatal("%s: misses needed capabilities", name);
 
+	fprintf(stderr,
+		"driver '%s' card '%s' bus_info '%s'\n",
+		cap.driver, cap.card, cap.bus_info);
+
 	struct v4l2_streamparm sparm;
 	memset(&sparm, 0, sizeof sparm);
 	sparm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
