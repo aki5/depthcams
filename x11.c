@@ -7,6 +7,7 @@
 #include <X11/extensions/XShm.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#include <turbojpeg.h>
 
 #include "x11.h"
 
@@ -27,8 +28,6 @@ static uchar *color_img;
 void
 x11serve(int fd)
 {
-	unsigned short *data;
-	int i;
 	if(fd != XConnectionNumber(display))
 		fprintf(stderr, "x11handle: passed fd does not match display\n");
 	while(XPending(display)){
@@ -36,11 +35,6 @@ x11serve(int fd)
 		XNextEvent(display, &ev);
 		switch(ev.type){
 		case Expose:
-/*
-			data = shmimg->data;
-			for(i = 0; i < width*height; i++)
-				data[i] = random();
-*/
 			XShmPutImage(display, window, DefaultGC(display, 0), shmimg, 0, 0, 0, 0, width, height, False);
 			break;
 		case ButtonPress:
@@ -52,53 +46,36 @@ x11serve(int fd)
 unsigned int
 false16(unsigned int val, unsigned int bits)
 {
-	unsigned int mask;
 	/* black - red - yellow - white */
-
-	mask = (1ull << bits) - 1;
 	val >>= (bits-7);
-
 	if(val < 32) // 32
 		return ((31-val) << 11) | val;
 	val -= 32;
-
 	if(val < 64) // 64
 		return (val << 5) | (31-val/2);
 	val -= 64;
-
 	if(val < 32) // 32
 		return (val << 11) | ((63-val*2) << 5);
 	val -= 32;
-
 	return 0x0000;
-	//return 0xffff;
 }
 unsigned int
 hot16(unsigned int val, unsigned int bits)
 {
-	unsigned int mask;
 	/* black - red - yellow - white */
-
-	mask = (1ull << bits) - 1;
 	val >>= (bits-8);
-
 	if(val < 32) // 32
 		return val;
 	val -= 32;
-
 	if(val < 64) // 64
 		return (val << 5) | (31-val/2);
 	val -= 64;
-
 	if(val < 32) // 32
 		return 0x07e0 | (val << 11);
 	val -= 32;
-
 	if(val < 32) // 32
 		return 0xffe0 | val;
-
 	return 0x0000;
-	//return 0xffff;
 }
 
 static unsigned short hot16tab[256];
@@ -173,7 +150,7 @@ x11bltdmap(uchar *dmap, int w, int h)
 	int i, j, k, l;
 	int iw = w/4;
 	float dstoff = M_PI;
-	float dstfac = .5f/M_PI * 127.0;
+	float dstfac = 255.0 / (2.0*M_PI); // [0..2PI] -> [0..255]
 	float conf;
 
 	if(img0 == NULL)
@@ -203,11 +180,11 @@ x11bltdmap(uchar *dmap, int w, int h)
 	}
 
 	uchar *shmdata;
-	shmdata = shmimg->data;
+	shmdata = (uchar *)shmimg->data;
 	for(i = 0; i < h; i++){
 		for(j = 0, l = 0; l < w; l += 32){
 			for(k = 0; k < 16; k += 2, j++){
-				long dst, dst2;
+				long dst;
 				float I, Q;
 				int imgoff = i*iw+j;
 				int shmoff = i*shmimg->bytes_per_line+2*j;
@@ -224,21 +201,16 @@ x11bltdmap(uchar *dmap, int w, int h)
 				I = isum[imgoff];
 				Q = qsum[imgoff];
 
-				/* depth and confidence
+				/* depth and confidence */
 				dst = (atan2f(Q, I) + dstoff) * dstfac;
 				conf = sqrtf(I*I+Q*Q);
-				//putshort(img0 + 2*imgoff, false16f(dst));
-				//putshort(img1 + 2*imgoff, hot16f(conf));
-				putshort(shmdata + shmoff, false16f(dst));
+				putshort(shmdata + shmoff, hot16f(dst));
 				putshort(shmdata + shmoff + 640, hot16f(conf));
-				*/
 
 				/* raw I and Q
-				*/
-				//putshort(img0 + 2*imgoff, hot16f(fabsf(I)));
-				//putshort(img1 + 2*imgoff, hot16f(fabsf(Q)));
 				putshort(shmdata + shmoff, hot16f(fabsf(I)));
 				putshort(shmdata + shmoff + 640, hot16f(fabsf(Q)));
+				*/
 
 			}
 		}
@@ -265,9 +237,6 @@ x11bltdmap(uchar *dmap, int w, int h)
 //XFlush(display);
 }
 
-#define TURBOJPEG 1
-#ifdef TURBOJPEG
-#include <turbojpeg.h>
 static tjhandle tjdec;
 void
 x11jpegframe(uchar *buf, int len)
@@ -306,20 +275,12 @@ x11jpegframe(uchar *buf, int len)
 	XDestroyImage(ximage);
 */
 }
-#else
-void
-x11jpegframe(uchar *buf, int len)
-{
-}
-#endif
 
 int
 x11init(void)
 {
-#ifdef TURBOJPEG
  	tjdec = tjInitDecompress();
 	//tjDestroy(tjdec);
-#endif
 
 	XInitThreads();
 
