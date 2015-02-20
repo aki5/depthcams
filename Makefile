@@ -1,5 +1,7 @@
 
 CFLAGS=-O3 -fomit-frame-pointer -ffast-math -W -Wall -Ilibs/include
+#CFLAGS=-g -W -Wall -Ilibs/include
+
 LIBS=\
 	-lX11\
 	 -lXext\

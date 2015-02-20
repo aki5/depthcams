@@ -20,6 +20,8 @@ static XShmSegmentInfo shminfo;
 
 static int width = 640;
 static int height = 240+480;
+static int depth;
+static int bypp;
 
 static int color_imgw;
 static int color_imgh;
@@ -187,7 +189,7 @@ x11bltdmap(uchar *dmap, int w, int h)
 				long dst;
 				float I, Q;
 				int imgoff = i*iw+j;
-				int shmoff = i*shmimg->bytes_per_line+2*j;
+				int shmoff = i*shmimg->bytes_per_line + j*bypp;
 
 				I = (float)getshort(dmap + i*w+l+k);
 				Q = (float)getshort(dmap + i*w+l+k+16);
@@ -205,11 +207,11 @@ x11bltdmap(uchar *dmap, int w, int h)
 				dst = (atan2f(Q, I) + dstoff) * dstfac;
 				conf = sqrtf(I*I+Q*Q);
 				putshort(shmdata + shmoff, hot16f(dst));
-				putshort(shmdata + shmoff + 640, hot16f(conf));
+				putshort(shmdata + shmoff + 320*bypp, hot16f(conf));
 
 				/* raw I and Q
 				putshort(shmdata + shmoff, hot16f(fabsf(I)));
-				putshort(shmdata + shmoff + 640, hot16f(fabsf(Q)));
+				putshort(shmdata + shmoff + 320*bypp, hot16f(fabsf(Q)));
 				*/
 
 			}
@@ -220,21 +222,7 @@ x11bltdmap(uchar *dmap, int w, int h)
 		hi = 0;
 
 	XShmPutImage(display, window, DefaultGC(display, 0), shmimg, 0, 0, 0, 0, width, height/2, False);
-/*
-	XImage *ximage0;
-	ximage0 = XCreateImage(display, visual, 16, ZPixmap, 0, img0, iw, h, 16, 0);
-	XPutImage(display, window, DefaultGC(display, 0), ximage0, 0, 0, 0, 0, iw, h);
 
-	XImage *ximage1;
-	ximage1 = XCreateImage(display, visual, 16, ZPixmap, 0, img1, iw, h, 16, 0);
-	XPutImage(display, window, DefaultGC(display, 0), ximage1, 0, 0, j, 0, iw, h);
-
-	ximage0->data = NULL;
-	XDestroyImage(ximage0);
-	ximage1->data = NULL;
-	XDestroyImage(ximage1);
-*/
-//XFlush(display);
 }
 
 static tjhandle tjdec;
@@ -242,7 +230,7 @@ void
 x11jpegframe(uchar *buf, int len)
 {
 	int subsamp;
-	uchar *dp, *sp, *ep;
+	uchar *dp, *dep, *sp, *ep;
 
 	tjDecompressHeader2(tjdec, buf, len, &color_imgw, &color_imgh, &subsamp);
 	if(color_imgw == 0 || color_imgh == 0)
@@ -251,34 +239,43 @@ x11jpegframe(uchar *buf, int len)
 		color_img = malloc(3 * color_imgw * color_imgh);
 	tjDecompress2(tjdec, buf, len, color_img, color_imgw, 0/*pitch they say*/, color_imgh, TJPF_RGB, TJFLAG_FASTDCT);
 
-	/* in-place convert to 16bit */
+	fprintf(stderr, "x11jpegframe: width %d height %d\n", color_imgw, color_imgh);
+
 	ep = color_img + 3 * color_imgw * color_imgh;
 	dp = (uchar *)shmimg->data + 240*shmimg->bytes_per_line;
-	for(sp = color_img; sp < ep; sp += 3){
-		unsigned short r, g, b;
-		unsigned short pix16;
-		r = sp[0] >> (8-5);
-		g = sp[1] >> (8-6);
-		b = sp[2] >> (8-5);
-		pix16 = (r << 11) | (g << 5) | b;
-		*dp++ = pix16 & 0xff;
-		*dp++ = pix16 >> 8;
+	dep = (uchar *)shmimg->data + shmimg->height*shmimg->bytes_per_line;
+	if(bypp == 2){
+		for(sp = color_img; sp < ep && dp < dep; sp += 3){
+			unsigned short r, g, b;
+			unsigned short pix16;
+			r = sp[0] >> (8-5);
+			g = sp[1] >> (8-6);
+			b = sp[2] >> (8-5);
+			pix16 = (r << 11) | (g << 5) | b;
+			dp[0] = pix16 & 0xff;
+			dp[1] = pix16 >> 8;
+			dp += 2;
+		}
+	} else if(bypp == 4){
+		for(sp = color_img; sp < ep && dp < dep; sp += 3){
+			dp[0] = sp[0];
+			dp[1] = sp[1];
+			dp[2] = sp[2];
+			dp[3] = 0xff;
+			dp += 4;
+		}
+	} else {
+		fprintf(stderr,"x11jpegframe: bypp (bytes per pixel) %d unsupported\n", bypp);
+		abort();
 	}
 	XShmPutImage(display, window, DefaultGC(display, 0), shmimg, 0, 240, 0, 240, width, 480, False);
-//XFlush(display);
-
-/*
-	XImage *ximage;
-	ximage = XCreateImage(display, visual, 16, ZPixmap, 0, color_img, color_imgw, color_imgh, 16, 0);
-	XPutImage(display, window, DefaultGC(display, 0), ximage, 0, 0, 0, 240, color_imgw, color_imgh);
-	ximage->data = NULL;
-	XDestroyImage(ximage);
-*/
 }
 
 int
 x11init(void)
 {
+	hot16init();
+	false16init();
  	tjdec = tjInitDecompress();
 	//tjDestroy(tjdec);
 
@@ -289,18 +286,28 @@ x11init(void)
 
 	visual = DefaultVisual(display, 0);
 	window = XCreateSimpleWindow(display, RootWindow(display, 0), 0, 0, width, height, 1, 0, 0);
+	depth = DefaultDepth(display, 0);
+
+	switch(depth){
+	default: bypp = 1; break;
+	case 15:
+	case 16: bypp = 2; break;
+	case 24: bypp = 4; break;
+	case 32: bypp = 4; break;
+	}
 
 	if(visual->class != TrueColor){
 		fprintf(stderr, "Cannot handle non true color visual ...\n");
 		return -1;
 	}
 
-	shmimg = XShmCreateImage(display, visual, 16, ZPixmap, NULL, &shminfo, width, height);
+	shmimg = XShmCreateImage(display, visual, depth, ZPixmap, NULL, &shminfo, width, height);
 	if(shmimg == NULL){
 		fprintf(stderr, "x11init: cannot create shmimg\n");
 		return -1;
 	}
-
+	fprintf(stderr, "x11init: bypp %d\n", bypp);
+	fprintf(stderr, "x11init: bytes_per_line %d\n", shmimg->bytes_per_line);
 	shminfo.shmid = shmget(IPC_PRIVATE, shmimg->bytes_per_line*shmimg->height, IPC_CREAT | 0777);
 	if(shminfo.shmid == -1){
 		fprintf(stderr, "x11init: shmget fail\n");
@@ -316,10 +323,7 @@ x11init(void)
 
 	XSelectInput(display, window, ButtonPressMask|ExposureMask);
 	XMapWindow(display, window);
-	//XSync(display, 0);
 
-	hot16init();
-	false16init();
 
 	return XConnectionNumber(display);
 }
