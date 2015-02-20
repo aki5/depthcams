@@ -221,6 +221,7 @@ struct Bufwork {
 	uchar *buf;
 	int len;
 	int fd;
+	int badframe;
 };
 
 static pthread_t workthr;
@@ -244,7 +245,8 @@ devwork(void *arg)
 
 	if(fd == depth_fd){
 		memcpy(buf2, buf, 1280*240);
-		x11bltdmap(buf2, 1280, 240);
+		if(!work->badframe)
+			x11bltdmap(buf2, 1280, 240);
 	}
 	if(fd == color_fd){
 		int buflen, jpeglen;
@@ -262,7 +264,8 @@ devwork(void *arg)
 			buf[jpeglen+8], buf[jpeglen+9], buf[jpeglen+10], buf[jpeglen+11],
 			buf[jpeglen+12], buf[jpeglen+13], buf[jpeglen+14], buf[jpeglen+15]
 		);
-		x11jpegframe(buf, jpeglen);
+		if(!work->badframe)
+			x11jpegframe(buf, jpeglen);
 	}
 
 	if(ioctl(fd, VIDIOC_QBUF, bufd) == -1){
@@ -293,24 +296,37 @@ devinput(int fd, uchar **bufs, int *lens)
 		return;
 	}
 
-	if(workup){
-		if(ioctl(fd, VIDIOC_QBUF, bufd) == -1){
-			warn("devinput: VIDIOC_QBUF");
-			return;
-		}
-		free(work);
-		//fprintf(stderr, "shit\n");
-		return;
+	work->badframe = 0;
+	if(fd == depth_fd){
+		static int prevseq;
+		fprintf(stderr,
+			"bufd index %d "
+			"type %d "
+			"flag %x "
+			"field %d "
+			"seq %d "
+			"bytes %d "
+			"\n",
+			bufd->index,
+			bufd->type,
+			bufd->flags,
+			bufd->field,
+			bufd->sequence-prevseq,
+			bufd->bytesused
+		);
+		if(bufd->bytesused != 307200)
+			work->badframe = 1;
+		prevseq = bufd->sequence;
 	}
+	if(bufd->flags & V4L2_BUF_FLAG_ERROR)
+		fprintf(stderr, "error flag set\n");
+	if(bufd->flags & V4L2_BUF_FLAG_DONE)
+		fprintf(stderr, "done flag set\n");
 
 	work->fd = fd;
 	work->buf = bufs[bufd->index];
 	work->len = lens[bufd->index];
 
-	//if((r = pthread_join(workthr, NULL)) != 0)
-		;
-	workup = 1;
-	//pthread_create(&workthr, NULL, devwork, work);
 	devwork(work);
 }
 
@@ -482,7 +498,7 @@ main(void)
 	x11_fd = x11init();
 
 	color_fd = -1;
-	color_fd = devopen("/dev/video0", 60);
+	color_fd = devopen("/dev/video0", 30);
 	devmap(color_fd, &color_bufs, &color_buf_lens, &ncolor_bufs);
 	devstart(color_fd);
 
