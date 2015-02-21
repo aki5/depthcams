@@ -136,24 +136,48 @@ memsetf(float *p, float val, int len)
 		p[i] = val;
 }
 
+float
+fhypotf(float a, float b)
+{
+	return b + 0.428f * a * a / b; // lousy 1% approx.
+}
+
+float
+fatan2f(float y, float x)
+{
+	float coeff_1 = M_PI/4.0f;
+	float abs_y = fabs(y)+1e-10f;
+	float r, angle;
+	if(x >= 0.0f){
+		r = (x - abs_y) / (x + abs_y);
+		angle = coeff_1 - coeff_1 * r;
+	} else {
+		r = (x + abs_y) / (abs_y - x);
+		angle = 3*coeff_1 - coeff_1 * r;
+	}
+	return y < 0.0f ? -angle : angle;
+}
 
 void
 x11bltdmap(uchar *dmap, int w, int h)
 {
+
+	int i, j, k, l;
+	float dstoff = M_PI;
+	float dstfac = 255.0 / (2.0*M_PI); // [0..2PI] -> [0..255]
+	float conf;
+
+/*
+	int iw = w/4;
 	static uchar *img0;
 	static uchar *img1;
 	static float **qimg;
 	static float **iimg;
 	static float *isum;
 	static float *qsum;
+
 	static int hi;
 	int nhist = 1;
-
-	int i, j, k, l;
-	int iw = w/4;
-	float dstoff = M_PI;
-	float dstfac = 255.0 / (2.0*M_PI); // [0..2PI] -> [0..255]
-	float conf;
 
 	if(img0 == NULL)
 		img0 = malloc(2*iw*h);
@@ -181,6 +205,7 @@ x11bltdmap(uchar *dmap, int w, int h)
 		memsetf(isum, 0.0f, iw*h);
 	}
 
+*/
 	uchar *shmdata;
 	shmdata = (uchar *)shmimg->data;
 	for(i = 0; i < h; i++){
@@ -188,12 +213,13 @@ x11bltdmap(uchar *dmap, int w, int h)
 			for(k = 0; k < 16; k += 2, j++){
 				long dst;
 				float I, Q;
-				int imgoff = i*iw+j;
 				int shmoff = i*shmimg->bytes_per_line + j*bypp;
 
 				I = (float)getshort(dmap + i*w+l+k);
 				Q = (float)getshort(dmap + i*w+l+k+16);
 
+/*
+				int imgoff = i*iw+j;
 				isum[imgoff] -= iimg[hi][imgoff];
 				qsum[imgoff] -= qimg[hi][imgoff];
 				iimg[hi][imgoff] = I;
@@ -202,10 +228,12 @@ x11bltdmap(uchar *dmap, int w, int h)
 				qsum[imgoff] += Q;
 				I = isum[imgoff];
 				Q = qsum[imgoff];
+*/
 
 				/* depth and confidence */
-				dst = (atan2f(Q, I) + dstoff) * dstfac;
-				conf = sqrtf(I*I+Q*Q);
+//				dst = (atan2f(Q, I) + dstoff) * dstfac;
+				dst = (fatan2f(Q, I) + dstoff) * dstfac;
+				conf = fhypotf(I, Q);
 				putshort(shmdata + shmoff, hot16f(dst));
 				putshort(shmdata + shmoff + 320*bypp, hot16f(conf));
 
@@ -217,10 +245,11 @@ x11bltdmap(uchar *dmap, int w, int h)
 			}
 		}
 	}
+/*
 	hi++;
 	if(hi >= nhist)
 		hi = 0;
-
+*/
 	XShmPutImage(display, window, DefaultGC(display, 0), shmimg, 0, 0, 0, 0, width, height/2, False);
 
 }
@@ -239,8 +268,6 @@ x11jpegframe(uchar *buf, int len)
 		color_img = malloc(3 * color_imgw * color_imgh);
 	tjDecompress2(tjdec, buf, len, color_img, color_imgw, 0/*pitch they say*/, color_imgh, TJPF_RGB, TJFLAG_FASTDCT);
 
-	fprintf(stderr, "x11jpegframe: width %d height %d\n", color_imgw, color_imgh);
-
 	ep = color_img + 3 * color_imgw * color_imgh;
 	dp = (uchar *)shmimg->data + 240*shmimg->bytes_per_line;
 	dep = (uchar *)shmimg->data + shmimg->height*shmimg->bytes_per_line;
@@ -258,9 +285,9 @@ x11jpegframe(uchar *buf, int len)
 		}
 	} else if(bypp == 4){
 		for(sp = color_img; sp < ep && dp < dep; sp += 3){
-			dp[0] = sp[0];
+			dp[0] = sp[2];
 			dp[1] = sp[1];
-			dp[2] = sp[2];
+			dp[2] = sp[0];
 			dp[3] = 0xff;
 			dp += 4;
 		}

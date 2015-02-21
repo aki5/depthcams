@@ -9,6 +9,7 @@ libjpeg-turbo-1.4.0/configure:
 	tar xvf libjpeg-turbo-1.4.0.tar.gz
 
 clean:
-	rm -rf libjpeg-turbo-1.4.0 libjpeg-turbo-build bin lib include share man
+	rm -rf bin lib include share man
 
-
+nuke: clean
+	rm -rf libjpeg-turbo-1.4.0 libjpeg-turbo-build

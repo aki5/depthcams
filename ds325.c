@@ -166,49 +166,6 @@ devstop(int fd)
 		warn("devstop: ioctl: VIDIOC_STREAMOFF");
 }
 
-int
-ch(int c)
-{
-	return isprint(c) ? c : '.';
-}
-
-int
-parsejpeg(uchar *buf, int len)
-{
-	int off = 0;
-	while(off+2 < len){
-		int marker, seglen;
-		while(off+2 < len){
-			if(buf[off] == 0xff && buf[off+1] != 0xff)
-				break;
-			off++;
-		}
-		marker = (buf[off] << 8) | buf[off+1];
-		seglen = off+4 <= len ? (buf[off+2] << 8) | buf[off+3] : 0;
-		switch(marker){
-		default:
-			off += 2 + seglen;
-			break;
-		case 0xff00:
-		case 0xff01:
-		case 0xffd0:
-		case 0xffd1:
-		case 0xffd2:
-		case 0xffd3:
-		case 0xffd4:
-		case 0xffd5:
-		case 0xffd6:
-		case 0xffd7:
-		case 0xffd8:
-			off += 2;
-			break;
-		case 0xffd9:
-			return off+2;
-		}
-	}
-	return -1;
-}
-
 typedef struct Bufwork Bufwork;
 struct Bufwork {
 	struct v4l2_buffer bufd;
@@ -414,18 +371,6 @@ init_cmd(int fd, int send_num)
 
 	if(ioctl(fd, UVCIOC_CTRL_QUERY, &ctrl) == -1)
 		fatal("init_cmd catastropf");
-
-/*
-	fprintf(stderr, "init_cmd %02x %02x %02x %02x %02x %02x %02x\n",
-		cmdtab[send_num].data[0],
-		cmdtab[send_num].data[1],
-		cmdtab[send_num].data[2],
-		cmdtab[send_num].data[3],
-		cmdtab[send_num].data[4],
-		cmdtab[send_num].data[5],
-		cmdtab[send_num].data[6]
-	);
-*/
 
 	return 0;
 }
