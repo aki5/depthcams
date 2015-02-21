@@ -80,6 +80,77 @@ hot16(unsigned int val, unsigned int bits)
 	return 0x0000;
 }
 
+void
+false4(unsigned int val, uchar *pix)
+{
+	if(val < 256){
+		pix[0] = val;
+		pix[1] = 0;
+		pix[2] = 255-val;
+		pix[3] = 255;
+		return;
+	}
+	val -= 256;
+	if(val < 256){
+		pix[0] = 255-val;
+		pix[1] = val;
+		pix[2] = 0;
+		pix[3] = 255;
+		return;
+	}
+	val -= 256;
+	if(val < 256){
+		pix[0] = 0;
+		pix[1] = 255-val;
+		pix[2] = val;
+		pix[3] = 255;
+		return;
+	}
+}
+
+void
+hot4(unsigned int val, uchar *pix)
+{
+	if(val < 256){
+		pix[0] = val;
+		pix[1] = 0;
+		pix[2] = 0;
+		pix[3] = 255;
+		return;
+	}
+	val -= 256;
+	if(val < 256){
+		pix[0] = 255-val;
+		pix[1] = val;
+		pix[2] = 0;
+		pix[3] = 255;
+		return;
+	}
+	val -= 256;
+	if(val < 256){
+		pix[0] = 0;
+		pix[1] = 255;
+		pix[2] = val;
+		pix[3] = 255;
+		return;
+	}
+	val -= 256;
+	if(val < 256){
+		pix[0] = val;
+		pix[1] = 255;
+		pix[2] = 255;
+		pix[3] = 255;
+		return;
+	}
+	pix[0] = 255;
+	pix[1] = 255;
+	pix[2] = 255;
+	pix[3] = 255;
+}
+
+static uchar false4tab[4*768];
+static uchar hot4tab[4*1024];
+
 static unsigned short hot16tab[256];
 static unsigned short false16tab[128];
 
@@ -97,12 +168,39 @@ false16f(float val)
 	return false16tab[x & 127];
 }
 
+static inline void
+hot4f(uchar *dp, float val)
+{
+	uchar *sp;
+	int x = (int)val;
+	sp = hot4tab + 4*(x%1024);
+	dp[0] = sp[0];
+	dp[1] = sp[1];
+	dp[2] = sp[2];
+	dp[3] = sp[3];
+}
+
+static inline void
+false4f(uchar *dp, float val)
+{
+	uchar *sp;
+	int x = (int)val;
+	sp = false4tab + 4*(x%768);
+	dp[0] = sp[0];
+	dp[1] = sp[1];
+	dp[2] = sp[2];
+	dp[3] = sp[3];
+}
+
+
 void
 hot16init(void)
 {
 	int i;
 	for(i = 0; i < 256; i++)
 		hot16tab[i] = hot16(i, 8);
+	for(i = 0; i < 1024; i++)
+		hot4(i, hot4tab + 4*i);
 }
 
 void
@@ -111,6 +209,9 @@ false16init(void)
 	int i;
 	for(i = 0; i < 128; i++)
 		false16tab[i] = false16(i, 7);
+	for(i = 0; i < 768; i++)
+		false4(i, false4tab + 4*i);
+
 }
 
 static inline long
@@ -163,93 +264,51 @@ x11bltdmap(uchar *dmap, int w, int h)
 {
 
 	int i, j, k, l;
-	float dstoff = M_PI;
-	float dstfac = 255.0 / (2.0*M_PI); // [0..2PI] -> [0..255]
-	float conf;
+	int shmoff;
+	float I, Q;
+	float intens;
+	float phase;
+	float dist;
 
-/*
-	int iw = w/4;
-	static uchar *img0;
-	static uchar *img1;
-	static float **qimg;
-	static float **iimg;
-	static float *isum;
-	static float *qsum;
-
-	static int hi;
-	int nhist = 1;
-
-	if(img0 == NULL)
-		img0 = malloc(2*iw*h);
-
-	if(img1 == NULL)
-		img1 = malloc(2*iw*h);
-
-	if(qimg == NULL){
-		qimg = malloc(nhist * sizeof qimg[0]);
-		for(i = 0; i < nhist; i++){
-			qimg[i] = malloc(iw*h*sizeof qimg[0][0]);
-			memsetf(qimg[i], 0.0f, iw*h);
-		}
-		qsum = malloc(iw*h*sizeof qsum[0]);
-		memsetf(qsum, 0.0f, iw*h);
-	}
-
-	if(iimg == NULL){
-		iimg = malloc(nhist * sizeof iimg[0]);
-		for(i = 0; i < nhist; i++){
-			iimg[i] = malloc(iw*h*sizeof iimg[0][0]);
-			memsetf(iimg[i], 0.0f, iw*h);
-		}
-		isum = malloc(iw*h*sizeof isum[0]);
-		memsetf(isum, 0.0f, iw*h);
-	}
-
-*/
 	uchar *shmdata;
 	shmdata = (uchar *)shmimg->data;
+	float qsum = 0.0f, isum = 0.0f;
 	for(i = 0; i < h; i++){
 		for(j = 0, l = 0; l < w; l += 32){
 			for(k = 0; k < 16; k += 2, j++){
-				long dst;
-				float I, Q;
-				int shmoff = i*shmimg->bytes_per_line + j*bypp;
+				shmoff = i*shmimg->bytes_per_line + (j<<bypp);
 
 				I = (float)getshort(dmap + i*w+l+k);
 				Q = (float)getshort(dmap + i*w+l+k+16);
 
-/*
-				int imgoff = i*iw+j;
-				isum[imgoff] -= iimg[hi][imgoff];
-				qsum[imgoff] -= qimg[hi][imgoff];
-				iimg[hi][imgoff] = I;
-				qimg[hi][imgoff] = Q;
-				isum[imgoff] += I;
-				qsum[imgoff] += Q;
-				I = isum[imgoff];
-				Q = qsum[imgoff];
-*/
+				qsum += Q;
+				isum += I;
 
-				/* depth and confidence */
-//				dst = (atan2f(Q, I) + dstoff) * dstfac;
-				dst = (fatan2f(Q, I) + dstoff) * dstfac;
-				conf = fhypotf(I, Q);
-				putshort(shmdata + shmoff, hot16f(dst));
-				putshort(shmdata + shmoff + 320*bypp, hot16f(conf));
+				intens = hypotf(Q, I);
+				Q /= intens;
+				I /= intens;
+				phase = atan2f(Q, I);
+				if(phase < 0.0f)
+					dist = -phase * 0.5f * 299792458.0f / (2.0f*M_PI*50e6f);
+				else
+					dist = (2.0f*M_PI-phase) * 0.5f * 299792458.0f / (2.0f*M_PI*50e6f);
 
-				/* raw I and Q
-				putshort(shmdata + shmoff, hot16f(fabsf(I)));
-				putshort(shmdata + shmoff + 320*bypp, hot16f(fabsf(Q)));
-				*/
-
+				false4f(shmdata + shmoff, dist*(767.0f/3.0f));
+				hot4f(shmdata + shmoff + (320<<bypp), intens);
 			}
 		}
 	}
-/*
-	hi++;
-	if(hi >= nhist)
-		hi = 0;
-*/
+
+	intens = hypotf(qsum, isum);
+	qsum /= intens;
+	isum /= intens;
+	phase = atan2f(qsum, isum);
+	if(phase < 0.0f)
+		dist = -phase * 0.5f * 299792458.0f / (2.0f*M_PI*50e6f);
+	else
+		dist = (2.0f*M_PI-phase) * 0.5f * 299792458.0f / (2.0f*M_PI*50e6f);
+	fprintf(stderr, "average dist %.2fm %.2fin qsum %f isum %f\n", dist, 100.0f*dist/2.54f, qsum, isum);
+
 	XShmPutImage(display, window, DefaultGC(display, 0), shmimg, 0, 0, 0, 0, width, height/2, False);
 
 }
@@ -271,7 +330,7 @@ x11jpegframe(uchar *buf, int len)
 	ep = color_img + 3 * color_imgw * color_imgh;
 	dp = (uchar *)shmimg->data + 240*shmimg->bytes_per_line;
 	dep = (uchar *)shmimg->data + shmimg->height*shmimg->bytes_per_line;
-	if(bypp == 2){
+	if(bypp == 1){
 		for(sp = color_img; sp < ep && dp < dep; sp += 3){
 			unsigned short r, g, b;
 			unsigned short pix16;
@@ -283,7 +342,7 @@ x11jpegframe(uchar *buf, int len)
 			dp[1] = pix16 >> 8;
 			dp += 2;
 		}
-	} else if(bypp == 4){
+	} else if(bypp == 2){
 		for(sp = color_img; sp < ep && dp < dep; sp += 3){
 			dp[0] = sp[2];
 			dp[1] = sp[1];
@@ -292,7 +351,7 @@ x11jpegframe(uchar *buf, int len)
 			dp += 4;
 		}
 	} else {
-		fprintf(stderr,"x11jpegframe: bypp (bytes per pixel) %d unsupported\n", bypp);
+		fprintf(stderr,"x11jpegframe: bypp (bytes per pixel) %d unsupported\n", (1<<bypp));
 		abort();
 	}
 	XShmPutImage(display, window, DefaultGC(display, 0), shmimg, 0, 240, 0, 240, width, 480, False);
@@ -316,11 +375,11 @@ x11init(void)
 	depth = DefaultDepth(display, 0);
 
 	switch(depth){
-	default: bypp = 1; break;
+	default: bypp = 0; break;
 	case 15:
-	case 16: bypp = 2; break;
-	case 24: bypp = 4; break;
-	case 32: bypp = 4; break;
+	case 16: bypp = 1; break;
+	case 24: bypp = 2; break;
+	case 32: bypp = 2; break;
 	}
 
 	if(visual->class != TrueColor){
@@ -333,7 +392,7 @@ x11init(void)
 		fprintf(stderr, "x11init: cannot create shmimg\n");
 		return -1;
 	}
-	fprintf(stderr, "x11init: bypp %d\n", bypp);
+	fprintf(stderr, "x11init: bypp %d\n", 1<<bypp);
 	fprintf(stderr, "x11init: bytes_per_line %d\n", shmimg->bytes_per_line);
 	shminfo.shmid = shmget(IPC_PRIVATE, shmimg->bytes_per_line*shmimg->height, IPC_CREAT | 0777);
 	if(shminfo.shmid == -1){
