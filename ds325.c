@@ -14,6 +14,7 @@
 #include <linux/videodev2.h>
 #include <linux/uvcvideo.h>
 #include <linux/usb/video.h>
+#include <math.h>
 
 
 #include "x11.h"
@@ -234,6 +235,102 @@ devinput(int fd, uchar **bufs)
 	devwork(work);
 }
 
+unsigned int
+ds325eu_get(int fd, int ctl, int reg)
+{
+	struct uvc_xu_control_query ctrl;
+	unsigned int val;
+	uchar buf[7] = {0};
+
+	buf[0] = 0x80 | ctl;
+	buf[1] = reg;
+
+	ctrl.unit = 6;
+	ctrl.selector = 2;
+	ctrl.query = UVC_SET_CUR;
+	ctrl.data = buf;
+	ctrl.size = sizeof buf;
+	if(ioctl(fd, UVCIOC_CTRL_QUERY, &ctrl) == -1){
+		fatal("ds325eu_read: set addr");
+		return -1;
+	}
+
+	ctrl.unit = 6;
+	ctrl.selector = 2;
+	ctrl.query = UVC_GET_CUR;
+	ctrl.data = buf;
+	ctrl.size = sizeof buf;
+	if(ioctl(fd, UVCIOC_CTRL_QUERY, &ctrl) == -1){
+		fatal("ds325eu_read: get data");
+		return -1;
+	}
+	val = buf[3] | (buf[4]<<8) | (buf[5]<<16) | (buf[6]<<24);
+
+	return val;
+}
+
+int
+ds325eu_set(int fd, int ctl, int reg, unsigned int val)
+{
+	struct uvc_xu_control_query ctrl;
+	uchar buf[7];
+
+	buf[0] = ctl;
+	buf[1] = reg;
+	buf[2] = 0;
+	buf[3] = val & 0xff;
+	buf[4] = (val >> 8) & 0xff;
+	buf[5] = (val >> 16) & 0xff;
+	buf[6] = (val >> 24) & 0xff;
+
+	ctrl.unit = 6;
+	ctrl.selector = 2;
+	ctrl.query = UVC_SET_CUR;
+	ctrl.data = buf;
+	ctrl.size = sizeof buf;
+	if(ioctl(fd, UVCIOC_CTRL_QUERY, &ctrl) == -1){
+		fatal("ds325eu_set: set addr");
+		return -1;
+	}
+
+	return 0;
+}
+
+/*
+ *	laser, fpga, sensor, adc?
+ */
+int
+ds325eu_temps(int fd)
+{
+	int a, b;
+
+	a = ds325eu_get(fd, 0x12, 0x35);
+	b = ds325eu_get(fd, 0x12, 0x36);
+
+	fprintf(stderr, "temps %d %d %d %d\n",
+		a & 0xff,
+		a >> 8,
+		b & 0xff,
+		b >> 8
+	);
+}
+
+/*
+ *	not fast updating, maybe twice a second.. might still prove useful
+ */
+int
+ds325eu_accel(int fd)
+{
+	short x, y, z;
+
+	x = (short)ds325eu_get(fd, 0x12, 0x38);
+	y = (short)ds325eu_get(fd, 0x12, 0x39);
+	z = (short)ds325eu_get(fd, 0x12, 0x3a);
+
+	fprintf(stderr, "accel %d %d %d, len %d\n", x, y, z, (int)sqrtf(x*x+y*y+z*z));
+
+	return 0;
+}
 
 int
 init_cmd(int fd, int send_num)
@@ -242,20 +339,6 @@ init_cmd(int fd, int send_num)
 		int query;
 		unsigned char data[7];
 	} cmdtab[] = {
-		{UVC_SET_CUR, {0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_GET_CUR, {0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_SET_CUR, {0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_GET_CUR, {0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_SET_CUR, {0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_GET_CUR, {0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_SET_CUR, {0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_GET_CUR, {0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_SET_CUR, {0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_GET_CUR, {0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-
-		{UVC_SET_CUR, {0x92, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_GET_CUR, {0x92, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-
 		{UVC_SET_CUR, {0x12, 0x1a, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
 		{UVC_SET_CUR, {0x12, 0x1b, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
 
@@ -348,15 +431,6 @@ init_cmd(int fd, int send_num)
 
 		{UVC_SET_CUR, {0x12, 0x1a, 0x00, 0x80, 0x14, 0x00, 0x00}}, // optional
 		{UVC_SET_CUR, {0x12, 0x1a, 0x00, 0xc0, 0x14, 0x00, 0x00}}, // 0xc0, 0x14 default, important
-
-		{UVC_SET_CUR, {0x92, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_GET_CUR, {0x92, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_SET_CUR, {0x92, 0x35, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_GET_CUR, {0x92, 0x35, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_SET_CUR, {0x92, 0x36, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_GET_CUR, {0x92, 0x36, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_SET_CUR, {0x92, 0x35, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_GET_CUR, {0x92, 0x35, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
 	};
 
 	if(send_num >= nelem(cmdtab))
@@ -373,6 +447,170 @@ init_cmd(int fd, int send_num)
 		fatal("init_cmd catastropf");
 
 	return 0;
+}
+
+void
+ds325eu_init(int fd, int modf_khz, int fps, int satur)
+{
+	int reg1a, reg1b;
+	int fdiv;
+
+	if(fps != 25 && fps != 30 && fps != 50 && fps != 60)
+		fatal("ds325_init: fps needs to be 25, 30, 50 or 60");
+
+	/* 0x18 divider would be 75MHz */
+	for(fdiv = 0x08; fdiv < 0x18; fdiv++)
+		if(modf_khz == 600000/fdiv)
+			break;
+
+	if(fdiv < 0x08 || fdiv >= 0x18){
+		fprintf(stderr, "ds325_init: modf_khz %d is not feasible, use one of", modf_khz);
+		for(fdiv = 0x08; fdiv <= 0x18; fdiv++)
+			fprintf(stderr, " %d", 600000/fdiv);
+		fprintf(stderr, "\n");
+		errno=0;
+		fatal("ds325_init");
+	}
+
+	reg1a = 0;
+	reg1b = 0;
+	ds325eu_set(fd, 0x12, 0x1a, reg1a); /* 0 */
+	ds325eu_set(fd, 0x12, 0x1b, reg1b); /* 0 */
+	ds325eu_set(fd, 0x12, 0x13, 0x4); /* 4 */
+	ds325eu_set(fd, 0x12, 0x14, 0x2c00); /* 11264 */
+	ds325eu_set(fd, 0x12, 0x15, 0x1); /* 1 */
+	ds325eu_set(fd, 0x12, 0x16, 0x0); /* 0 */
+	ds325eu_set(fd, 0x12, 0x17, 0xef); /* 239 */
+	ds325eu_set(fd, 0x12, 0x18, 0x0); /* 0 */
+	ds325eu_set(fd, 0x12, 0x19, 0x13f); /* 319 */
+	reg1a |= 0x0400;
+	ds325eu_set(fd, 0x12, 0x1a, reg1a);
+	reg1b |= 0x0100; // turns laser on quickly! TODO: see what these do with a scope.
+	ds325eu_set(fd, 0x12, 0x1b, reg1b);
+	reg1b |= 0x0400; // some kind of auto-adjust for laser
+	ds325eu_set(fd, 0x12, 0x1b, reg1b);
+	reg1b |= 0x0800; // turns laser on sloooowly TODO: see what these do with a scope.
+	ds325eu_set(fd, 0x12, 0x1b, reg1b);
+	ds325eu_set(fd, 0x12, 0x1c, 0x5); /* 5 */
+
+	ds325eu_set(fd, 0x12, 0x20, 0x4b0); /* 0x4b0, 1200 */
+	ds325eu_set(fd, 0x12, 0x27, 0x106); /* 0x106, 262 */
+
+	ds325eu_set(fd, 0x12, 0x28, 0x14d); /* laser intensity */
+	ds325eu_set(fd, 0x12, 0x29, 0xf0); /* 0xf0, 240 */
+
+	ds325eu_set(fd, 0x12, 0x2a, 0x14d); /* 333, seems to make no difference, is this the other laser? */
+	ds325eu_set(fd, 0x12, 0x30, 0x0); /* 0 */
+	ds325eu_set(fd, 0x12, 0x31, 0x0); /* 0 */
+	ds325eu_set(fd, 0x12, 0x32, 0x0); /* 0 */
+	ds325eu_set(fd, 0x12, 0x3c, 0x2f); /* 47 */
+	ds325eu_set(fd, 0x12, 0x3d, 0x3e7); /* 999 */
+	ds325eu_set(fd, 0x12, 0x3e, 0xf); /* 15 */
+	ds325eu_set(fd, 0x12, 0x3f, 0xf); /* 15 */
+	ds325eu_set(fd, 0x12, 0x40, 0x3e8); /* 1000 */
+	ds325eu_set(fd, 0x12, 0x43, 0x109); /* 265 */
+	ds325eu_set(fd, 0x12, 0x1e, 0x8209); /* 33289 */
+	ds325eu_set(fd, 0x12, 0x1d, 0x119); /* 281 */
+	ds325eu_set(fd, 0x12, 0x44, 0x1e); /* 30 */
+	ds325eu_set(fd, 0x12, 0x1b, reg1b); /* 3328 */
+	reg1b |= 0x4000;
+	ds325eu_set(fd, 0x12, 0x1b, reg1b); /* 19712 */
+	ds325eu_set(fd, 0x12, 0x45, 0x101); /* 257 */
+	ds325eu_set(fd, 0x12, 0x46, 0x2); /* 2 */
+	ds325eu_set(fd, 0x12, 0x47, 0x30); /* 48 */
+
+	/*
+	 *	registers not set:
+	 *		0x1f - reads zero
+	 *		0x21 - some kind of status reg, polled for != 0xffff before init.
+	 *		0x22 - reads as 4
+	 *		0x23, 0x24, 0x25, 0x26 - reads zero
+	 *		0x2b, 0x2c, 0x2d, 0x2e - reads zero
+	 *		0x34 - reads zero
+	 *		0x35 - temp?
+	 *		0x36 - temp?
+	 *		0x37 - zero
+	 *		0x38, 0x39, 0x3a - accelerometer x y z
+	 *		0x3b - reads 181?
+	 *		0x41, 0x42
+	 *		0x48, 0x49
+	 *
+	 *	registers set more than once
+	 *		0x1a, 0x1b
+	 *		0x2f
+	 */
+
+	/*
+	 *	why 4 repeats of the clock divider? theory:
+	 *		a clock for laser
+	 *		a delayed one for sensor integrator toggle
+	 *		a third one to clock sensor readout
+	 *		a fourth one to clock ADC
+	 *	TODO: verify with a scope
+	 *	we should probably not overclock the sensor and ADC
+	 *	what's the role of register 0x2f here?
+	 */
+	ds325eu_set(fd, 0x12, 0x2f, 0x60);
+	fdiv = (fdiv<<8) | fdiv;
+	ds325eu_set(fd, 0x12, 0x0, fdiv);
+	ds325eu_set(fd, 0x12, 0x1, fdiv);
+	ds325eu_set(fd, 0x12, 0x2f, 0x60);
+
+	ds325eu_set(fd, 0x12, 0x3, 0x0); /* phase adj? */
+	ds325eu_set(fd, 0x12, 0x4, 0x30); /* phase adj? */
+	ds325eu_set(fd, 0x12, 0x5, 0x60); /* phase adj? */
+	ds325eu_set(fd, 0x12, 0x6, 0x90); /* phase adj? */
+	ds325eu_set(fd, 0x12, 0x7, 0x0); /* 0 */
+	ds325eu_set(fd, 0x12, 0x8, 0x0); /* 0 */
+	ds325eu_set(fd, 0x12, 0x9, 0x0); /* 0 */
+	ds325eu_set(fd, 0x12, 0xa, 0x0); /* 0 */
+	ds325eu_set(fd, 0x12, 0x2, 0x0); /* why is this one out of order? */
+	ds325eu_set(fd, 0x12, 0xb, 0xea60); /* 60000 */
+	ds325eu_set(fd, 0x12, 0xc, 0x0); /* 0 */
+	ds325eu_set(fd, 0x12, 0xd, 0x4740); /* 18240 */
+	ds325eu_set(fd, 0x12, 0xe, 0x0); /* 0 */
+	ds325eu_set(fd, 0x12, 0xf, 0x0); /* 0 */
+	ds325eu_set(fd, 0x12, 0x10, 0x0); /* 0 */
+	ds325eu_set(fd, 0x12, 0x11, 0x1e0); /* 480 */
+
+	if(fps == 50 || fps == 60){
+		ds325eu_set(fd, 0x12, 0x12, 0x2); /* 2 */
+	} else if(fps == 25 || fps == 30){
+		ds325eu_set(fd, 0x12, 0x12, 0x4); /* 4 */
+	}
+
+	reg1a |= 0x1000;
+	ds325eu_set(fd, 0x12, 0x1a, reg1a); /* 5120 */
+
+	if(fps == 25 || fps == 50){
+		ds325eu_set(fd, 0x12, 0x33, 0xa980);
+		ds325eu_set(fd, 0x12, 0x4a, 0x3);
+	} else if(fps == 30 || fps == 60){
+		ds325eu_set(fd, 0x12, 0x33, 0x70f0);
+		ds325eu_set(fd, 0x12, 0x4a, 0x2);
+	}
+
+	if(satur){
+		reg1a |= 0x0080;
+		ds325eu_set(fd, 0x12, 0x1a, reg1a); /* 5312 */
+	}
+
+	reg1a |= 0x0040;
+	ds325eu_set(fd, 0x12, 0x1a, reg1a);
+}
+
+void
+ds325eu_dump(int fd)
+{
+	int i;
+	unsigned int uval;
+	short sval;
+	for(i = 0; i < 76; i++){
+		uval = ds325eu_get(fd, 0x12, i);
+		sval = (short)uval;
+		printf("ds325eu_set(fd, 0x%x, 0x%x, 0x%x); /* %d, %d */\n",
+			0x12, i, uval, uval, sval);
+	}
 }
 
 int
@@ -394,8 +632,8 @@ main(int argc, char *argv[])
 		case 'd':
 			dflag = 1;
 			break;
-		default: /* '?' */
-			fprintf(stderr, "Usage: %s [-dc]\nn", argv[0]);
+		default:
+			fprintf(stderr, "usage: %s [-dc]\nn", argv[0]);
 			exit(1);
 		}
 	}
@@ -411,10 +649,27 @@ main(int argc, char *argv[])
 
 	depth_fd = -1;
 	if(!dflag){
-		depth_fd = devopen("/dev/video1", 60);
+		int r, fps;
+		fps = 25;
+		depth_fd = devopen("/dev/video1", fps);
 		devmap(depth_fd, &depth_bufs, &depth_buf_lens, &ndepth_bufs);
 		devstart(depth_fd);
+		for(;;){
+			r = ds325eu_get(depth_fd, 0x12, 0x21);
+			if(r == 0xffff)
+				continue;
+			fprintf(stderr, "got %x, now we go!\n", r);
+			ds325eu_init(depth_fd, 50000, fps, 0);
+			break;
+		}
 	}
+
+	ds325eu_dump(depth_fd);
+
+	int frame = 0;
+	int reg1a, reg1b;
+	reg1a = ds325eu_get(depth_fd, 0x12, 0x1a);
+	reg1b = ds325eu_get(depth_fd, 0x12, 0x1b);
 
 	for(;;){
 		struct timeval tv;
@@ -440,11 +695,13 @@ main(int argc, char *argv[])
 			warn("select");
 
 		if(depth_fd != -1 && FD_ISSET(depth_fd, &rset)){
-			static int off;
-			if(init_cmd(depth_fd, off) == 0){
-				off++;
-			}
+			frame++;
 			devinput(depth_fd, depth_bufs);
+			if(0 || (frame & 0x3f) == 0x3f){
+				reg1b ^= 0x0100;
+				fprintf(stderr, "reg1b: %x\n", reg1b);
+				ds325eu_set(depth_fd, 0x12, 0x1b, reg1b);
+			}
 		}
 
 		if(color_fd != -1 && FD_ISSET(color_fd, &rset)){
@@ -454,13 +711,23 @@ main(int argc, char *argv[])
 		if(x11_fd != -1)
 			x11serve(x11_fd);
 
+
+
+//ds325eu_accel(depth_fd);
+//ds325eu_temps(depth_fd);
+
 	}
 
-	devstop(color_fd);
-	devstop(depth_fd);
+	if(color_fd != -1){
+		devstop(color_fd);
+		close(color_fd);
+	}
 
-	close(color_fd);
-	close(depth_fd);
+	if(depth_fd != -1){
+		devstop(depth_fd);
+		close(depth_fd);
+	}
+
 
 	return 0;
 }
