@@ -16,8 +16,8 @@
 #include <linux/usb/video.h>
 #include <math.h>
 
+#include "draw3.h"
 
-#include "x11.h"
 
 #define nelem(x) (int)(sizeof(x)/sizeof(x[0]))
 
@@ -26,7 +26,7 @@ char *depth_dev = "/dev/video1";
 
 int color_fd;
 int depth_fd;
-int x11_fd;
+int draw_fd;
 
 
 double
@@ -236,11 +236,11 @@ devwork(void *arg)
 
 	if(fd == depth_fd){
 		if(!work->badframe)
-			x11bltdmap(buf, 640, 480);
+			process_depth(buf, 640, 480);
 	}
 	if(fd == color_fd){
 		if(!work->badframe)
-			x11jpegframe(buf, len);
+			process_color(buf, 640, 360); // sigh aki, arrogant hard coder.
 	}
 
 	if(ioctl(fd, VIDIOC_QBUF, bufd) == -1){
@@ -335,7 +335,7 @@ realsense_laserpower(int fd)
 	ctrl.selector = PROPERTY_IVCAM_LASER_POWER;
 	ctrl.query = UVC_SET_CUR;
 	ctrl.size = 1;
-	val = 7; /* 0 to 16, 7 was reasonable for calib */
+	val = 16; /* 0 to 16, 7 was reasonable for calib */
 	ctrl.data = &val;
 	if(ioctl(fd, UVCIOC_CTRL_QUERY, &ctrl) == -1)
 		warn("realsense laser power fd %d", fd);
@@ -765,7 +765,7 @@ main(int argc, char *argv[])
 		}
 	}
 
-	x11_fd = x11init();
+	draw_fd = drawinit(640, 480+360);
 
 	color_fd = -1;
 	if(color_dev != NULL){
@@ -812,15 +812,15 @@ main(int argc, char *argv[])
 			FD_SET(color_fd, &rset);
 		if(depth_fd != -1)
 			FD_SET(depth_fd, &rset);
-		if(x11_fd != -1)
-			FD_SET(x11_fd, &rset);
+		if(draw_fd != -1)
+			FD_SET(draw_fd, &rset);
 		tv.tv_sec = 10;
 		tv.tv_usec = 0;
 
 		max_fd = -1;
 		max_fd = color_fd > max_fd ? color_fd : max_fd;
 		max_fd = depth_fd > max_fd ? depth_fd : max_fd;
-		max_fd = x11_fd > max_fd ? x11_fd : max_fd;
+		max_fd = draw_fd > max_fd ? draw_fd : max_fd;
 
 		if(select(max_fd+1, &rset, NULL, NULL, &tv) == -1)
 			warn("select");
@@ -844,8 +844,8 @@ main(int argc, char *argv[])
 			devinput(color_fd, color_bufs);
 		}
 
-		if(x11_fd != -1)
-			x11serve(x11_fd);
+		if(draw_fd != -1)
+			drawhandle(draw_fd, 0);
 
 
 //ds325eu_accel(depth_fd);

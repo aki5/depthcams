@@ -9,11 +9,9 @@
 #include <sys/shm.h>
 #include <turbojpeg.h>
 #include <xmmintrin.h>
-#include "x11.h"
 #include "contour.h"
 #include "fitpoly.h"
-#include "drawtri.h"
-#include "trilist.h"
+#include "draw3.h"
 
 #define nelem(x) (sizeof(x)/sizeof(x[0]))
 
@@ -23,19 +21,6 @@ struct Pt2 {
 	short y;
 };
 
-static Display *display;
-static Visual *visual;
-static Window window;
-
-static XImage *shmimg;
-static XShmSegmentInfo shminfo;
-
-static int width = 640;
-static int height = 480+480;
-static int depth;
-static int bypp;
-static int shmbusy;
-
 static int color_imgw;
 static int color_imgh;
 static uchar *color_img;
@@ -43,31 +28,6 @@ static uchar *color_img;
 static uchar *contour_img;
 
 static float verts[4*320*240];
-
-void
-x11serve(int fd)
-{
-	if(fd != XConnectionNumber(display))
-		fprintf(stderr, "x11handle: passed fd does not match display\n");
-	while(XPending(display)){
-		XEvent ev;
-		XNextEvent(display, &ev);
-		switch(ev.type){
-		case Expose:
-			XShmPutImage(display, window, DefaultGC(display, 0), shmimg, 0, 0, 0, 0, width, height, False);
-			break;
-		case ButtonPress:
-			exit(0);
-		case ShmCompletion:
-		case 65:
-			shmbusy = 0;
-			break;
-		default:
-			fprintf(stderr, "unknown xevent %d\n", ev.type);
-			break;
-		}
-	}
-}
 
 unsigned int
 false16(unsigned int val, unsigned int bits)
@@ -308,7 +268,7 @@ vecprod(short *a, short *b, short *c)
 }
 
 void
-x11bltdmap(uchar *dmap, int w, int h)
+process_depth(uchar *dmap, int w, int h)
 {
 
 	int i, j, k, l;
@@ -319,8 +279,9 @@ x11bltdmap(uchar *dmap, int w, int h)
 	float dist;
 	short *pt;
 	int npt, apt;
+	int cliph;
 
-	if(shmbusy)
+	if(drawbusy())
 		return;
 
 	Contour contr;
@@ -333,22 +294,23 @@ x11bltdmap(uchar *dmap, int w, int h)
 			int pix;
 			off = i*w+j;
 			pix = getu16(dmap + 2*off);
-			cimg[off] = (pix > 0 && pix < 60000) ? Fset : 0;
-			dimg[off] = (pix > 0 && pix < 60000) ? 0 : Fset;
+			cimg[off] = (pix > 0) ? Fset : 0;
+			dimg[off] = (pix > 0) ? 0 : Fset;
 		}
 	}
 
 	apt = 8192;
 	pt = malloc(2 * apt * sizeof pt[0]);
 
-	Trilist tris;
 	const uchar white[4] = { 0xff, 0xff, 0xff, 0xff };
 	const uchar poscolor[4] = { 0x50, 0xff, 0x30, 0xff };
 	const uchar negcolor[4] = { 0xff, 0x30, 0x50, 0xff };
 
-	inittrilist(&tris);
+	memset(framebuffer, 0, stride*height);
 
 	enum { Nloops = 10 };
+
+	cliph = h < height ? h : height;
 
 	initcontour(&contr, cimg, w, h);
 	for(j = 0; j < Nloops; j++){
@@ -367,8 +329,8 @@ x11bltdmap(uchar *dmap, int w, int h)
 				d = pt + 2*poly[3];
 				if(vecprod(a, b, c) < 0){
 					fixcontour(&contr, pt, npt);
-					addtrilist(&tris, a, b, c, poscolor);
-					addtrilist(&tris, c, d, a, poscolor);
+					drawtri(framebuffer, width, cliph, a, b, c, poscolor);
+					drawtri(framebuffer, width, cliph, a, c, d, poscolor);
 				}
 			}
 		}
@@ -392,39 +354,18 @@ x11bltdmap(uchar *dmap, int w, int h)
 				d = pt + 2*poly[3];
 				if(vecprod(a, b, c) < 0){
 					fixcontour(&contr, pt, npt);
-					addtrilist(&tris, a, b, c, negcolor);
-					addtrilist(&tris, c, d, a, negcolor);
+					drawtri(framebuffer, width, cliph, a, b, c, negcolor);
+					drawtri(framebuffer, width, cliph, a, c, d, negcolor);
 				}
-			}		}
+			}
+		}
 		erodecontour(&contr);
 	}
 
 	free(pt);
-/*
-	uchar *shmdata;
-	shmdata = (uchar *)shmimg->data;
-	for(i = 0; i < h; i++){
-		for(j = 0; j < w; j++){
-			int cval, dval;
-			off = i*shmimg->bytes_per_line + (j<<bypp);
-			cval = ((cimg[i*w+j] & Fcont) == Fcont) ? 255 : 0;
-			dval = ((dimg[i*w+j] & Fcont) == Fcont) ? 255 : 0;
-			shmdata[off+0] = cval;
-			shmdata[off+1] = cval|dval;
-			shmdata[off+2] = dval;
-			shmdata[off+3] = 0xff;
-		}
-	}
-*/
 	free(dimg);
 	free(cimg);
 
-	memset(shmimg->data, 0, 480*shmimg->bytes_per_line);
-	drawtri((uchar*)shmimg->data, width, 480, tris.tris, tris.colors, tris.ntris);
-	freetrilist(&tris);
-
-	shmbusy = 1;
-	XShmPutImage(display, window, DefaultGC(display, 0), shmimg, 0, 0, 0, 0, width, 480, True);
 
 #if 0
 	float qsum = 0.0f, isum = 0.0f;
@@ -451,21 +392,6 @@ x11bltdmap(uchar *dmap, int w, int h)
 		}
 	}
 #endif
-
-#if 0
-	intens = hypotf(qsum, isum);
-	qsum /= intens;
-	isum /= intens;
-	phase = atan2f(qsum, isum);
-	if(phase < 0.0f)
-		dist = -phase * 0.5f * 299792458.0f / (2.0f*M_PI*50e6f);
-	else
-		dist = (2.0f*M_PI-phase) * 0.5f * 299792458.0f / (2.0f*M_PI*50e6f);
-	fprintf(stderr, "average dist %.2fm %.2fin qsum %f isum %f\n", dist, 100.0f*dist/2.54f, qsum, isum);
-#endif
-
-	//XShmPutImage(display, window, DefaultGC(display, 0), shmimg, 0, 0, 0, 0, width, height/2, False);
-
 }
 
 static inline float
@@ -478,10 +404,13 @@ clampf(float a, float min, float max)
 
 static tjhandle tjdec;
 void
-x11jpegframe(uchar *buf, int len)
+process_color(uchar *buf, int w, int h)
 {
 	int subsamp;
 	uchar *dp, *dep, *sp, *ep;
+
+	if(drawbusy())
+		return;
 
 #if 0
 	tjDecompressHeader2(tjdec, buf, len, &color_imgw, &color_imgh, &subsamp);
@@ -521,86 +450,33 @@ x11jpegframe(uchar *buf, int len)
 #else
 //	if(len > 4*640*(shmimg->height-480))
 //		len = 4*640*(shmimg->height-480);
-	dp = shmimg->data + 480*shmimg->bytes_per_line;
-	int i;
-	for(i = 0; i < len; i += 4){
-		float y0, y1, u, v;
+	int i, j, off;
+	for(j = 0; j < h && (j+480) < height; j++){
+		dp = framebuffer + (j+480)*stride;
+		for(i = 0; i < w && i < width; i += 2){
+			float y0, y1, u, v;
 
-		y0 = (float)buf[i];
-		u = (float)buf[i+1];
-		y1 = (float)buf[i+2];
-		v = (float)buf[i+3];
+			off = 2*(j*w+i);
 
-		dp[0] = clampf(y0 + 1.732446f * (u-128.0f), 0.0f, 255.0f);
-		dp[1] = clampf(y0 - 0.698001f * (v-128.0f) - (0.337633f * (u-128.0f)), 0.0f, 255.0f);
-		dp[2] = clampf(y0 + 1.370705f * (v-128.0f), 0.0f, 255.0f);
-		dp[3] = 0xff;
+			y0 = (float)buf[off];
+			u = (float)buf[off+1];
+			y1 = (float)buf[off+2];
+			v = (float)buf[off+3];
 
-		dp[4] = clampf(y1 + 1.732446f * (u-128.0f), 0.0f, 255.0f);
-		dp[5] = clampf(y1 - 0.698001f * (v-128.0f) - (0.337633f * (u-128.0f)), 0.0f, 255.0f);
-		dp[6] = clampf(y1 + 1.370705f * (v-128.0f), 0.0f, 255.0f);
-		dp[7] = 0xff;
+			dp[0] = clampf(y0 + 1.732446f * (u-128.0f), 0.0f, 255.0f);
+			dp[1] = clampf(y0 - 0.698001f * (v-128.0f) - (0.337633f * (u-128.0f)), 0.0f, 255.0f);
+			dp[2] = clampf(y0 + 1.370705f * (v-128.0f), 0.0f, 255.0f);
+			dp[3] = 0xff;
 
-		dp += 8;
+			dp[4] = clampf(y1 + 1.732446f * (u-128.0f), 0.0f, 255.0f);
+			dp[5] = clampf(y1 - 0.698001f * (v-128.0f) - (0.337633f * (u-128.0f)), 0.0f, 255.0f);
+			dp[6] = clampf(y1 + 1.370705f * (v-128.0f), 0.0f, 255.0f);
+			dp[7] = 0xff;
+
+			dp += 8;
+		}
 	}
 #endif
-	XShmPutImage(display, window, DefaultGC(display, 0), shmimg, 0, 480, 0, 480, width, 480, False);
-}
-
-int
-x11init(void)
-{
-	hot16init();
-	false16init();
- 	tjdec = tjInitDecompress();
-	//tjDestroy(tjdec);
-
-	if((display = XOpenDisplay(NULL)) == NULL){
-		fprintf(stderr, "cannot open display!\n");
-		return 1;
-	}
-
-	visual = DefaultVisual(display, 0);
-	window = XCreateSimpleWindow(display, RootWindow(display, 0), 0, 0, width, height, 1, 0, 0);
-	depth = DefaultDepth(display, 0);
-
-	switch(depth){
-	default: bypp = 0; break;
-	case 15:
-	case 16: bypp = 1; break;
-	case 24: bypp = 2; break;
-	case 32: bypp = 2; break;
-	}
-
-	if(visual->class != TrueColor){
-		fprintf(stderr, "Cannot handle non true color visual ...\n");
-		return -1;
-	}
-
-	shmimg = XShmCreateImage(display, visual, depth, ZPixmap, NULL, &shminfo, width, height);
-	if(shmimg == NULL){
-		fprintf(stderr, "x11init: cannot create shmimg\n");
-		return -1;
-	}
-
-	fprintf(stderr, "x11init: bypp %d\n", 1<<bypp);
-	fprintf(stderr, "x11init: bytes_per_line %d\n", shmimg->bytes_per_line);
-	shminfo.shmid = shmget(IPC_PRIVATE, shmimg->bytes_per_line*shmimg->height, IPC_CREAT | 0777);
-	if(shminfo.shmid == -1){
-		fprintf(stderr, "x11init: shmget fail\n");
-		return -1;
-	}
-	shminfo.shmaddr = shmimg->data = shmat(shminfo.shmid, NULL, 0);
-	if(shminfo.shmaddr == (void *)-1){
-		fprintf(stderr, "x11init: shmat fail\n");
-		return -1;
-	}
-	shminfo.readOnly = False;
-	XShmAttach(display, &shminfo);
-
-	XSelectInput(display, window, ButtonPressMask|ExposureMask);
-	XMapWindow(display, window);
-
-
-	return XConnectionNumber(display);
+	drawflush();
+//	XShmPutImage(display, window, DefaultGC(display, 0), shmimg, 0, 480, 0, 480, width, 480, False);
 }
