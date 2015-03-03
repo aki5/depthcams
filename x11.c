@@ -8,8 +8,20 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <turbojpeg.h>
-
+#include <xmmintrin.h>
 #include "x11.h"
+#include "contour.h"
+#include "fitpoly.h"
+#include "drawtri.h"
+#include "trilist.h"
+
+#define nelem(x) (sizeof(x)/sizeof(x[0]))
+
+typedef struct Pt2 Pt2;
+struct Pt2 {
+	short x;
+	short y;
+};
 
 static Display *display;
 static Visual *visual;
@@ -19,13 +31,18 @@ static XImage *shmimg;
 static XShmSegmentInfo shminfo;
 
 static int width = 640;
-static int height = 240+480;
+static int height = 480+480;
 static int depth;
 static int bypp;
+static int shmbusy;
 
 static int color_imgw;
 static int color_imgh;
 static uchar *color_img;
+
+static uchar *contour_img;
+
+static float verts[4*320*240];
 
 void
 x11serve(int fd)
@@ -41,6 +58,13 @@ x11serve(int fd)
 			break;
 		case ButtonPress:
 			exit(0);
+		case ShmCompletion:
+		case 65:
+			shmbusy = 0;
+			break;
+		default:
+			fprintf(stderr, "unknown xevent %d\n", ev.type);
+			break;
 		}
 	}
 }
@@ -192,6 +216,17 @@ false4f(uchar *dp, float val)
 	dp[3] = sp[3];
 }
 
+static inline void
+false4i(uchar *dp, int val)
+{
+	uchar *sp;
+	sp = false4tab + 4*(val%768);
+	dp[0] = sp[0];
+	dp[1] = sp[1];
+	dp[2] = sp[2];
+	dp[3] = sp[3];
+}
+
 
 void
 hot16init(void)
@@ -212,6 +247,13 @@ false16init(void)
 	for(i = 0; i < 768; i++)
 		false4(i, false4tab + 4*i);
 
+}
+
+
+static inline int
+getu16(uchar *p)
+{
+	return (p[1]<<8) | p[0];
 }
 
 static inline long
@@ -259,19 +301,132 @@ fatan2f(float y, float x)
 	return y < 0.0f ? -angle : angle;
 }
 
+static inline int
+vecprod(short *a, short *b, short *c)
+{
+	return a[0]*(b[1]-c[1]) + b[0]*(c[1]-a[1]) + c[0]*(a[1]-b[1]);
+}
+
 void
 x11bltdmap(uchar *dmap, int w, int h)
 {
 
 	int i, j, k, l;
-	int shmoff;
+	int shmoff, off;
 	float I, Q;
 	float intens;
 	float phase;
 	float dist;
+	short *pt;
+	int npt, apt;
 
+	if(shmbusy)
+		return;
+
+	Contour contr;
+	uchar *cimg, *dimg;
+
+	cimg = malloc(w*h);
+	dimg = malloc(w*h);
+	for(i = 0; i < h; i++){
+		for(j = 0; j < w; j++){
+			int pix;
+			off = i*w+j;
+			pix = getu16(dmap + 2*off);
+			cimg[off] = (pix > 0 && pix < 60000) ? Fset : 0;
+			dimg[off] = (pix > 0 && pix < 60000) ? 0 : Fset;
+		}
+	}
+
+	apt = 8192;
+	pt = malloc(2 * apt * sizeof pt[0]);
+
+	Trilist tris;
+	const uchar white[4] = { 0xff, 0xff, 0xff, 0xff };
+	const uchar poscolor[4] = { 0x50, 0xff, 0x30, 0xff };
+	const uchar negcolor[4] = { 0xff, 0x30, 0x50, 0xff };
+
+	inittrilist(&tris);
+
+	enum { Nloops = 10 };
+
+	initcontour(&contr, cimg, w, h);
+	for(j = 0; j < Nloops; j++){
+		resetcontour(&contr);
+		while((npt = nextcontour(&contr, pt, apt)) != -1){
+			int poly[5];
+			int npoly;
+			if(npt > h)
+				continue;
+			npoly = fitpoly(poly, nelem(poly), pt, npt, 5);
+			if(npoly == 4){
+				short *a, *b, *c, *d;
+				a = pt + 2*poly[0];
+				b = pt + 2*poly[1];
+				c = pt + 2*poly[2];
+				d = pt + 2*poly[3];
+				if(vecprod(a, b, c) < 0){
+					fixcontour(&contr, pt, npt);
+					addtrilist(&tris, a, b, c, poscolor);
+					addtrilist(&tris, c, d, a, poscolor);
+				}
+			}
+		}
+		erodecontour(&contr);
+	}
+
+	initcontour(&contr, dimg, w, h);
+	for(j = 0; j < Nloops; j++){
+		resetcontour(&contr);
+		while((npt = nextcontour(&contr, pt, apt)) != -1){
+			int poly[5];
+			int npoly;
+			if(npt > h)
+				continue;
+			npoly = fitpoly(poly, nelem(poly), pt, npt, 5);
+			if(npoly == 4){
+				short *a, *b, *c, *d;
+				a = pt + 2*poly[0];
+				b = pt + 2*poly[1];
+				c = pt + 2*poly[2];
+				d = pt + 2*poly[3];
+				if(vecprod(a, b, c) < 0){
+					fixcontour(&contr, pt, npt);
+					addtrilist(&tris, a, b, c, negcolor);
+					addtrilist(&tris, c, d, a, negcolor);
+				}
+			}		}
+		erodecontour(&contr);
+	}
+
+	free(pt);
+/*
 	uchar *shmdata;
 	shmdata = (uchar *)shmimg->data;
+	for(i = 0; i < h; i++){
+		for(j = 0; j < w; j++){
+			int cval, dval;
+			off = i*shmimg->bytes_per_line + (j<<bypp);
+			cval = ((cimg[i*w+j] & Fcont) == Fcont) ? 255 : 0;
+			dval = ((dimg[i*w+j] & Fcont) == Fcont) ? 255 : 0;
+			shmdata[off+0] = cval;
+			shmdata[off+1] = cval|dval;
+			shmdata[off+2] = dval;
+			shmdata[off+3] = 0xff;
+		}
+	}
+*/
+	free(dimg);
+	free(cimg);
+
+	memset(shmimg->data, 0, 480*shmimg->bytes_per_line);
+	drawtri((uchar*)shmimg->data, width, 480, tris.tris, tris.colors, tris.ntris);
+	freetrilist(&tris);
+
+	shmbusy = 1;
+	XShmPutImage(display, window, DefaultGC(display, 0), shmimg, 0, 0, 0, 0, width, 480, True);
+
+#if 0
 	float qsum = 0.0f, isum = 0.0f;
 	for(i = 0; i < h; i++){
 		for(j = 0, l = 0; l < w; l += 32){
@@ -284,21 +439,20 @@ x11bltdmap(uchar *dmap, int w, int h)
 				qsum += Q;
 				isum += I;
 
-				intens = hypotf(Q, I);
-				Q /= intens;
-				I /= intens;
+				intens = sqrtf(Q*Q+I*I);
 				phase = atan2f(Q, I);
-				if(phase < 0.0f)
-					dist = -phase * 0.5f * 299792458.0f / (2.0f*M_PI*50e6f);
-				else
-					dist = (2.0f*M_PI-phase) * 0.5f * 299792458.0f / (2.0f*M_PI*50e6f);
+				phase = phase < 0.0f ? -phase : 2.0f*M_PI-phase;
+				dist = phase * (0.5f * 299792458.0f / (2.0f*M_PI*50e6f));
 
 				false4f(shmdata + shmoff, dist*(767.0f/3.0f));
 				hot4f(shmdata + shmoff + (320<<bypp), intens);
+
 			}
 		}
 	}
+#endif
 
+#if 0
 	intens = hypotf(qsum, isum);
 	qsum /= intens;
 	isum /= intens;
@@ -308,9 +462,18 @@ x11bltdmap(uchar *dmap, int w, int h)
 	else
 		dist = (2.0f*M_PI-phase) * 0.5f * 299792458.0f / (2.0f*M_PI*50e6f);
 	fprintf(stderr, "average dist %.2fm %.2fin qsum %f isum %f\n", dist, 100.0f*dist/2.54f, qsum, isum);
+#endif
 
-	XShmPutImage(display, window, DefaultGC(display, 0), shmimg, 0, 0, 0, 0, width, height/2, False);
+	//XShmPutImage(display, window, DefaultGC(display, 0), shmimg, 0, 0, 0, 0, width, height/2, False);
 
+}
+
+static inline float
+clampf(float a, float min, float max)
+{
+	a = a > min ? a : min;
+	a = a < max ? a : max;
+	return a;
 }
 
 static tjhandle tjdec;
@@ -320,6 +483,7 @@ x11jpegframe(uchar *buf, int len)
 	int subsamp;
 	uchar *dp, *dep, *sp, *ep;
 
+#if 0
 	tjDecompressHeader2(tjdec, buf, len, &color_imgw, &color_imgh, &subsamp);
 	if(color_imgw == 0 || color_imgh == 0)
 		return;
@@ -354,7 +518,33 @@ x11jpegframe(uchar *buf, int len)
 		fprintf(stderr,"x11jpegframe: bypp (bytes per pixel) %d unsupported\n", (1<<bypp));
 		abort();
 	}
-	XShmPutImage(display, window, DefaultGC(display, 0), shmimg, 0, 240, 0, 240, width, 480, False);
+#else
+//	if(len > 4*640*(shmimg->height-480))
+//		len = 4*640*(shmimg->height-480);
+	dp = shmimg->data + 480*shmimg->bytes_per_line;
+	int i;
+	for(i = 0; i < len; i += 4){
+		float y0, y1, u, v;
+
+		y0 = (float)buf[i];
+		u = (float)buf[i+1];
+		y1 = (float)buf[i+2];
+		v = (float)buf[i+3];
+
+		dp[0] = clampf(y0 + 1.732446f * (u-128.0f), 0.0f, 255.0f);
+		dp[1] = clampf(y0 - 0.698001f * (v-128.0f) - (0.337633f * (u-128.0f)), 0.0f, 255.0f);
+		dp[2] = clampf(y0 + 1.370705f * (v-128.0f), 0.0f, 255.0f);
+		dp[3] = 0xff;
+
+		dp[4] = clampf(y1 + 1.732446f * (u-128.0f), 0.0f, 255.0f);
+		dp[5] = clampf(y1 - 0.698001f * (v-128.0f) - (0.337633f * (u-128.0f)), 0.0f, 255.0f);
+		dp[6] = clampf(y1 + 1.370705f * (v-128.0f), 0.0f, 255.0f);
+		dp[7] = 0xff;
+
+		dp += 8;
+	}
+#endif
+	XShmPutImage(display, window, DefaultGC(display, 0), shmimg, 0, 480, 0, 480, width, 480, False);
 }
 
 int
@@ -392,6 +582,7 @@ x11init(void)
 		fprintf(stderr, "x11init: cannot create shmimg\n");
 		return -1;
 	}
+
 	fprintf(stderr, "x11init: bypp %d\n", 1<<bypp);
 	fprintf(stderr, "x11init: bytes_per_line %d\n", shmimg->bytes_per_line);
 	shminfo.shmid = shmget(IPC_PRIVATE, shmimg->bytes_per_line*shmimg->height, IPC_CREAT | 0777);
@@ -399,7 +590,7 @@ x11init(void)
 		fprintf(stderr, "x11init: shmget fail\n");
 		return -1;
 	}
-	shminfo.shmaddr = shmimg->data = shmat(shminfo.shmid, 0, 0);
+	shminfo.shmaddr = shmimg->data = shmat(shminfo.shmid, NULL, 0);
 	if(shminfo.shmaddr == (void *)-1){
 		fprintf(stderr, "x11init: shmat fail\n");
 		return -1;

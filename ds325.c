@@ -21,12 +21,13 @@
 
 #define nelem(x) (int)(sizeof(x)/sizeof(x[0]))
 
+char *color_dev = "/dev/video0";
+char *depth_dev = "/dev/video1";
+
 int color_fd;
 int depth_fd;
 int x11_fd;
 
-int dflag;
-int cflag;
 
 double
 tsec(void)
@@ -69,6 +70,7 @@ int
 devopen(char *name, int fps)
 {
 	struct v4l2_capability cap;
+	int i, j;
 	int fd;
 
 	if((fd = open(name, O_RDWR)) == -1) // O_NONBLOCK
@@ -85,6 +87,47 @@ devopen(char *name, int fps)
 		"driver '%s' card '%s' bus_info '%s'\n",
 		cap.driver, cap.card, cap.bus_info);
 
+	struct v4l2_fmtdesc fmtdesc;
+    struct v4l2_frmsizeenum frmsize;
+	for(i = 0;; i++){
+		fmtdesc.index = i;
+		fmtdesc.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+		if(ioctl(fd, VIDIOC_ENUM_FMT, &fmtdesc) == -1)
+			break;
+		fprintf(stderr, "format desc '%s'\n", fmtdesc.description);
+		fprintf(stderr, "format fourcc '%x'\n", fmtdesc.pixelformat);
+		fprintf(stderr, "format sizes ", fmtdesc.pixelformat);
+		for(j = 0;; j++){
+			frmsize.pixel_format = fmtdesc.pixelformat;
+			frmsize.index = j;
+			if(ioctl(fd, VIDIOC_ENUM_FRAMESIZES, &frmsize) == -1)
+				break;
+			if(frmsize.type == V4L2_FRMSIZE_TYPE_DISCRETE)
+				fprintf(stderr, " %dx%d", frmsize.discrete.width, frmsize.discrete.height);
+			else
+				fprintf(stderr, " UNKNOWN");
+		}
+		fprintf(stderr, "\n");
+	}
+
+
+	struct v4l2_format fmt;
+	memset(&fmt, 0, sizeof fmt);
+	fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	if(ioctl(fd, VIDIOC_G_FMT, &fmt) == -1)
+		warn("get format");
+	if(fps == 60){
+		fmt.fmt.pix.width = 640;
+		fmt.fmt.pix.height = 480;
+		fmt.fmt.pix.pixelformat = 0;
+	} else {
+		fmt.fmt.pix.width = 640;
+		fmt.fmt.pix.height = 360;
+		fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
+	}
+	if(ioctl(fd, VIDIOC_S_FMT, &fmt) == -1)
+		warn("set format");
+
 	struct v4l2_streamparm sparm;
 	memset(&sparm, 0, sizeof sparm);
 	sparm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -92,7 +135,8 @@ devopen(char *name, int fps)
 	sparm.parm.capture.timeperframe.denominator = fps;
 	fprintf(stderr, "set fps %d", sparm.parm.capture.timeperframe.denominator);
 	if(ioctl(fd, VIDIOC_S_PARM, &sparm) == -1)
-		fprintf(stderr, "set frame rate error %d, %s\n", errno, strerror(errno));
+		warn("set streaming params");
+
 	ioctl(fd, VIDIOC_G_PARM, &sparm);
 	fprintf(stderr, "get fps:  %d\n", sparm.parm.capture.timeperframe.denominator);
 
@@ -179,7 +223,6 @@ struct Bufwork {
 void *
 devwork(void *arg)
 {
-	static uchar buf2[1280*240];
 	Bufwork *work;
 	struct v4l2_buffer *bufd;
 	uchar *buf;
@@ -192,9 +235,8 @@ devwork(void *arg)
 	len = work->len;
 
 	if(fd == depth_fd){
-		memcpy(buf2, buf, 1280*240);
 		if(!work->badframe)
-			x11bltdmap(buf2, 1280, 240);
+			x11bltdmap(buf, 640, 480);
 	}
 	if(fd == color_fd){
 		if(!work->badframe)
@@ -233,6 +275,99 @@ devinput(int fd, uchar **bufs)
 	work->len = bufd->bytesused;
 
 	devwork(work);
+}
+
+/*
+	Filter documentation
+
+	0 Skeleton
+		Reports the depth data for high fidelity (high confidence) pixels only, and all other pixels as invalid.
+	1 Raw
+		Raw depth image without any post-processing filters.
+	2 Raw + Gradients filter
+		Raw depth image  with the gradient filter applied.
+	3 Very close range
+		Very low smoothing effect with high sharpness, accuracy levels, and low noise artifacts. Good for any distances of up to 350mm.
+	4 Close range
+		Low smoothing effect with high sharpness and accuracy levels. The noise artifacts are optimized for distances between 350mm to 550mm.
+	5 Mid-range [Default]
+		Moderate smoothing effect optimized for distances between 550mm to 850mm to balance between good sharpness level, high accuracy and moderate noise artifacts.
+	6 Far range
+		High smoothing effect for distances between 850mm to 1000mm bringing good accuracy with moderate sharpness level.
+	7 Very far range
+		Very high smoothing effect to bring moderate accuracy level for distances above 1000mm. Use together with the MotionRangeTradeOff property to increase the depth range.
+
+
+*/
+void
+realsense_laserpower(int fd)
+{
+	struct uvc_xu_control_query ctrl;
+	unsigned char val;
+
+	enum {
+		PROPERTY_IVCAM_LASER_POWER = 1, // (0-16), default 16
+		PROPERTY_IVCAM_ACCURACY = 2, // (1-3), default 2
+		PROEPRTY_IVCAM_MOTION_RANGE_TRADE_OFF = 3, // (0-100), default 0
+		PROPERTY_IVCAM_FILTER_OPTION = 5,  // (0-7), default 5
+		CONFTHR = 6, //(0-15), default 6
+	};
+
+	ctrl.unit = 6;
+	ctrl.selector = PROPERTY_IVCAM_FILTER_OPTION;
+	ctrl.query = UVC_SET_CUR;
+	ctrl.size = 1;
+	val = 1; /* 0 skel, 1 raw */
+	ctrl.data = &val;
+	if(ioctl(fd, UVCIOC_CTRL_QUERY, &ctrl) == -1)
+		warn("realsense filter fd %d", fd);
+
+	ctrl.unit = 6;
+	ctrl.selector = PROPERTY_IVCAM_ACCURACY;
+	ctrl.query = UVC_SET_CUR;
+	ctrl.size = 1;
+	val = 1; /* 1: finest (11 patterns, 50fps), 2: medium (10 patterns, 55fps), 3: coarse (9 patterns, 60fps) */
+	ctrl.data = &val;
+	if(ioctl(fd, UVCIOC_CTRL_QUERY, &ctrl) == -1)
+		warn("realsense accuracy fd %d", fd);
+
+	ctrl.unit = 6;
+	ctrl.selector = PROPERTY_IVCAM_LASER_POWER;
+	ctrl.query = UVC_SET_CUR;
+	ctrl.size = 1;
+	val = 7; /* 0 to 16, 7 was reasonable for calib */
+	ctrl.data = &val;
+	if(ioctl(fd, UVCIOC_CTRL_QUERY, &ctrl) == -1)
+		warn("realsense laser power fd %d", fd);
+
+	ctrl.unit = 6;
+	ctrl.selector = PROEPRTY_IVCAM_MOTION_RANGE_TRADE_OFF;
+	ctrl.query = UVC_SET_CUR;
+	ctrl.size = 1;
+	val = 0;
+	ctrl.data = &val;
+	if(ioctl(fd, UVCIOC_CTRL_QUERY, &ctrl) == -1)
+		warn("realsense range fd %d", fd);
+
+	ctrl.unit = 6;
+	ctrl.selector = CONFTHR;
+	ctrl.query = UVC_SET_CUR;
+	ctrl.size = 1;
+	val = 15;
+	ctrl.data = &val;
+	if(ioctl(fd, UVCIOC_CTRL_QUERY, &ctrl) == -1)
+		warn("realsense confidence threshold fd %d", fd);
+}
+
+int
+ds325eu_freqdiv(int modfreq_khz)
+{
+	int fdiv;
+	/* 0x18 divider would be 75MHz */
+	for(fdiv = 0x08; fdiv < 0x18; fdiv++)
+		if(modfreq_khz == 600000/fdiv)
+			return fdiv;
+	return -1;
 }
 
 unsigned int
@@ -299,7 +434,7 @@ ds325eu_set(int fd, int ctl, int reg, unsigned int val)
 /*
  *	laser, fpga, sensor, adc?
  */
-int
+void
 ds325eu_temps(int fd)
 {
 	int a, b;
@@ -332,125 +467,87 @@ ds325eu_accel(int fd)
 	return 0;
 }
 
-int
-init_cmd(int fd, int send_num)
+static inline short
+getshort(uchar *p)
 {
-	struct {
-		int query;
-		unsigned char data[7];
-	} cmdtab[] = {
-		{UVC_SET_CUR, {0x12, 0x1a, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_SET_CUR, {0x12, 0x1b, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
+	short val;
+	val = (p[1]<<8) | p[0];
+	return val;
+}
 
-		{UVC_SET_CUR, {0x12, 0x13, 0x00, 0x04, 0x00, 0x00, 0x00}}, // blacks out, light turns on
-		{UVC_SET_CUR, {0x12, 0x14, 0x00, 0x00, 0x2c, 0x00, 0x00}}, // orig: 0x2c super fast but crazy without
-		{UVC_SET_CUR, {0x12, 0x15, 0x00, 0x01, 0x00, 0x00, 0x00}}, // goes nuts without
-		{UVC_SET_CUR, {0x12, 0x16, 0x00, 0x00, 0x00, 0x00, 0x00}}, // optional
+static inline void
+get8f(uchar *p, float *r)
+{
+	int i;
+	for(i = 0; i < 8; i++)
+		r[i] = (float)getshort(p + 2*i);
+}
 
-		{UVC_SET_CUR, {0x12, 0x17, 0x00, 0xef, 0x00, 0x00, 0x00}}, // orig: 239 (0xef), last scanline(!?)
-		{UVC_SET_CUR, {0x12, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00}}, // optional
-
-		{UVC_SET_CUR, {0x12, 0x19, 0x00, 0x3f, 0x01, 0x00, 0x00}}, // orig: 319 (0x3f, 0x01), goes nuts if less than 0x3c, last column(!?)
-
-		{UVC_SET_CUR, {0x12, 0x1a, 0x00, 0x00, 0x04, 0x00, 0x00}}, // optional
-		{UVC_SET_CUR, {0x12, 0x1b, 0x00, 0x00, 0x01, 0x00, 0x00}}, // optional
-
-		{UVC_SET_CUR, {0x12, 0x1b, 0x00, 0x00, 0x05, 0x00, 0x00}}, // optional
-		{UVC_SET_CUR, {0x12, 0x1b, 0x00, 0x00, 0x0d, 0x00, 0x00}}, // optional
-		{UVC_SET_CUR, {0x12, 0x1c, 0x00, 0x05, 0x00, 0x00, 0x00}}, // optional
-		{UVC_SET_CUR, {0x12, 0x20, 0x00, 0xb0, 0x04, 0x00, 0x00}}, // optional
-		{UVC_SET_CUR, {0x12, 0x27, 0x00, 0x06, 0x01, 0x00, 0x00}}, // optional
-
-		{UVC_SET_CUR, {0x12, 0x28, 0x00, 0xff, 0x01, 0x00, 0x00}}, // orig: 0x4d, 0x01, 0x4d, 0x02 reduced funny flickers, lights off without. some kind of initial value. where's the auto tune enable then?
-		{UVC_SET_CUR, {0x12, 0x29, 0x00, 0xf0, 0x00, 0x00, 0x00}}, // orig: 0xf0, 0x00. hard to see difference
-
-		{UVC_SET_CUR, {0x12, 0x2a, 0x00, 0xff, 0x01, 0x00, 0x00}}, // orig: 0x4d, 0x01, optional. presumably for the missing second laser?
-		{UVC_SET_CUR, {0x12, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00}}, // optional
-
-		{UVC_SET_CUR, {0x12, 0x31, 0x00, 0x00, 0x00, 0x00, 0x00}}, // optional
-		{UVC_SET_CUR, {0x12, 0x32, 0x00, 0x00, 0x00, 0x00, 0x00}}, // optional
-
-		{UVC_SET_CUR, {0x12, 0x3c, 0x00, 0x4f, 0x00, 0x00, 0x00}}, // orig: 0x2f, 0x00, lights off without. affects autoadjust. 0x4f seems brighter?
-		{UVC_SET_CUR, {0x12, 0x3d, 0x00, 0xe7, 0x03, 0x00, 0x00}}, // orig: 999 (0xe7, 0x03), lights off without 
-
-		{UVC_SET_CUR, {0x12, 0x3e, 0x00, 0x0f, 0x00, 0x00, 0x00}}, // orig: 0x0f, needs to be >= 0x05, unstable without
-		{UVC_SET_CUR, {0x12, 0x3f, 0x00, 0x0f, 0x00, 0x00, 0x00}}, // orig: 0x0f, needs to be >= 0x05, unstable without
-		{UVC_SET_CUR, {0x12, 0x40, 0x00, 0xe8, 0x03, 0x00, 0x00}}, // orig: 1000 (0xe8, 0x03) optional
-
-		{UVC_SET_CUR, {0x12, 0x43, 0x00, 0x09, 0x01, 0x00, 0x00}}, // orig: 0x09, 0x01 no light without, bigger number causes longer delay for light to come up
-
-		{UVC_SET_CUR, {0x12, 0x1e, 0x00, 0x09, 0x82, 0x00, 0x00}}, // goes nuts without
-		{UVC_SET_CUR, {0x12, 0x1d, 0x00, 0x19, 0x01, 0x00, 0x00}}, // goes nuts without
-
-		{UVC_SET_CUR, {0x12, 0x44, 0x00, 0x1e, 0x00, 0x00, 0x00}}, // optional
-
-		{UVC_SET_CUR, {0x12, 0x1b, 0x00, 0x00, 0x0d, 0x00, 0x00}}, // optional
-		{UVC_SET_CUR, {0x12, 0x1b, 0x00, 0x00, 0x4d, 0x00, 0x00}}, // orig: 0x00, 0x4d complete blackout if disabled. highest bit crashes it. needs at least 8+1 to work.
-
-		{UVC_SET_CUR, {0x12, 0x45, 0x00, 0x01, 0x01, 0x00, 0x00}}, // orig: 0x01, 0x01. hard to see difference
-		{UVC_SET_CUR, {0x12, 0x46, 0x00, 0x02, 0x00, 0x00, 0x00}}, // orig: 0x02, 0x00. hard to see difference
-		{UVC_SET_CUR, {0x12, 0x47, 0x00, 0x32, 0x00, 0x00, 0x00}}, // orig: 0x32, 0x00. hard to see difference
-
-		{UVC_SET_CUR, {0x12, 0x2f, 0x00, 0x60, 0x00, 0x00, 0x00}}, // orig: 0x60, 0x00. hard to see difference
-
-		// this controls the modulation frequency.
-		// formula for frequency is 1/x * 600MHz, ie. the default of 0x0c (12) is 50MHz.
-		// usable range seems to be from 25MHz to 66MHz (0x18 to 0x08)
-		{UVC_SET_CUR, {0x12, 0x00, 0x00, 0x0c, 0x0c, 0x00, 0x00}}, // orig: 0x0c, 0x0c pairs with below. something to do with frequency?
-		{UVC_SET_CUR, {0x12, 0x01, 0x00, 0x0c, 0x0c, 0x00, 0x00}}, // orig: 0x0c, 0x0c something to do with frequency
-
-		{UVC_SET_CUR, {0x12, 0x2f, 0x00, 0x60, 0x00, 0x00, 0x00}}, // default 0x60 optional
-
-		{UVC_SET_CUR, {0x12, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00}}, // optional
-		{UVC_SET_CUR, {0x12, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00}}, // optional
-		{UVC_SET_CUR, {0x12, 0x04, 0x00, 0x30, 0x00, 0x00, 0x00}}, // also changes the data
-		{UVC_SET_CUR, {0x12, 0x05, 0x00, 0x60, 0x00, 0x00, 0x00}}, // default 0x60 weird modification of data (blue goes missing in phase plot)
-		{UVC_SET_CUR, {0x12, 0x06, 0x00, 0x90, 0x00, 0x00, 0x00}}, // default 0x90, noisier?, some kind of wobble. line noise?
-
-		{UVC_SET_CUR, {0x12, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_SET_CUR, {0x12, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_SET_CUR, {0x12, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-		{UVC_SET_CUR, {0x12, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00}}, //optional
-
-
-		{UVC_SET_CUR, {0x12, 0x0b, 0x00, 0x60, 0xea, 0x00, 0x00}}, // orig: 60000 (0x60, 0xea) slow framerate at zero, seems to work if set >60000, but not below
-		{UVC_SET_CUR, {0x12, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00}}, // optional
-		{UVC_SET_CUR, {0x12, 0x0d, 0x00, 0x40, 0x47, 0x00, 0x00}}, // orig: 0x40, 0x47, runs with 0xff,0x48 but no higher. affects brightness of image.
-
-		{UVC_SET_CUR, {0x12, 0x0e, 0x00, 0x00, 0x00, 0x00, 0x00}}, // optional
-		{UVC_SET_CUR, {0x12, 0x0f, 0x00, 0x00, 0x00, 0x00, 0x00}}, // optional
-		{UVC_SET_CUR, {0x12, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00}}, // optional
-
-		{UVC_SET_CUR, {0x12, 0x11, 0x00, 0xe0, 0x02, 0x00, 0x00}}, // orig: 480 (0xe0, 0x01) weird shit without. needs to be >= 8. funny specks if very small?
-		{UVC_SET_CUR, {0x12, 0x12, 0x00, 0x02, 0x00, 0x00, 0x00}}, // orig: 0x02, 0x00 frame rate select. 120fps/x (?), 4 is 30fps.
-
-		{UVC_SET_CUR, {0x12, 0x1a, 0x00, 0x00, 0x14, 0x00, 0x00}}, // matches the one later? optional
-
-		{UVC_SET_CUR, {0x12, 0x33, 0x00, 0xf0, 0x70, 0x00, 0x00}}, // messes up image, weird ass bands?
-		{UVC_SET_CUR, {0x12, 0x4a, 0x00, 0x02, 0x00, 0x00, 0x00}}, // ??
-
-		{UVC_SET_CUR, {0x12, 0x1a, 0x00, 0x80, 0x14, 0x00, 0x00}}, // optional
-		{UVC_SET_CUR, {0x12, 0x1a, 0x00, 0xc0, 0x14, 0x00, 0x00}}, // 0xc0, 0x14 default, important
-	};
-
-	if(send_num >= nelem(cmdtab))
-		return -1;
-
-	struct uvc_xu_control_query ctrl;
-	ctrl.unit = UVC_PU_HUE_CONTROL;
-	ctrl.selector = 2;
-	ctrl.query = cmdtab[send_num].query;
-	ctrl.size = 7;
-	ctrl.data = cmdtab[send_num].data;
-
-	if(ioctl(fd, UVCIOC_CTRL_QUERY, &ctrl) == -1)
-		fatal("init_cmd catastropf");
-
-	return 0;
+static inline int
+v3normalizef(float *v)
+{
+	float vlen;
+	vlen = sqrtf(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+	if(vlen > 1e-6f){
+		v[0] /= vlen;
+		v[1] /= vlen;
+		v[2] /= vlen;
+		return 0;
+	}
+	return -1;
 }
 
 void
-ds325eu_init(int fd, int modf_khz, int fps, int satur)
+ds325_dirs(float *dirs)
+{
+	/* they say it is 74° x 58° x 87° (w x h x d) */
+	float x, y, z;
+	float theta;
+	int i;
+
+	theta = 74.0f/180.0f*M_PI;
+	z = (0.5f * 320.0f) / tanf(0.5f*theta);
+	for(y = -120.0f; y < 120.0f; y += 1.0f){
+		for(x = -160.0f; x < 320.0f; x += 1.0f){
+			dirs[3*i+0] = x;
+			dirs[3*i+1] = y;
+			dirs[3*i+2] = z;
+			v3normalizef(dirs + 3*i);
+		}
+	}
+}
+
+void
+ds325_depth(uchar *dmap, float *dirs, float *pos, float *val)
+{
+	const float phase2dst = 0.5f * 299792458.0f/(2.0f*M_PI*50e6f);
+	float I[8], Q[8];
+	float th[8];
+	float dst;
+	int i, j, k;
+	float x, y;
+
+	x = 0.0f;
+	y = 0.0f;
+	for(j = 0; j < 320*240; j += 320, y += 1.0f){
+		/* each row has 20 32-byte blocks */
+		for(i = 0; i < 320; i += 16, y += 16.0f){
+			get8f(dmap + 2*(j+i), I);
+			get8f(dmap + 2*(j+i) + 16, Q);
+			for(k = 0; k < 8; k++){
+				th[k] = atan2f(Q[k], I[k]);
+				th[k] = phase2dst * (th[k] < 0.0f ? -th[k] : 2.0f*M_PI-th[k]);
+				pos[3*(i+j+k)+0] = dirs[3*(i+j+k)+0] * th[k];
+				pos[3*(i+j+k)+1] = dirs[3*(i+j+k)+1] * th[k];
+				pos[3*(i+j+k)+2] = dirs[3*(i+j+k)+2] * th[k];
+				val[j+i] = sqrtf(Q[k]*Q[k] + I[k]*I[k]);
+			}
+		}
+	}
+}
+
+void
+ds325eu_init(int fd, int modfreq_khz, int fps, int satur, int dutycycle)
 {
 	int reg1a, reg1b;
 	int fdiv;
@@ -458,62 +555,65 @@ ds325eu_init(int fd, int modf_khz, int fps, int satur)
 	if(fps != 25 && fps != 30 && fps != 50 && fps != 60)
 		fatal("ds325_init: fps needs to be 25, 30, 50 or 60");
 
-	/* 0x18 divider would be 75MHz */
-	for(fdiv = 0x08; fdiv < 0x18; fdiv++)
-		if(modf_khz == 600000/fdiv)
-			break;
+	if((fdiv = ds325eu_freqdiv(modfreq_khz)) == -1)
+		fatal("ds325_init: invalid modfreq_khz %d", modfreq_khz);
 
-	if(fdiv < 0x08 || fdiv >= 0x18){
-		fprintf(stderr, "ds325_init: modf_khz %d is not feasible, use one of", modf_khz);
-		for(fdiv = 0x08; fdiv <= 0x18; fdiv++)
-			fprintf(stderr, " %d", 600000/fdiv);
-		fprintf(stderr, "\n");
-		errno=0;
-		fatal("ds325_init");
-	}
+	if(dutycycle == -1)
+		dutycycle = 240;
 
 	reg1a = 0;
 	reg1b = 0;
 	ds325eu_set(fd, 0x12, 0x1a, reg1a); /* 0 */
 	ds325eu_set(fd, 0x12, 0x1b, reg1b); /* 0 */
-	ds325eu_set(fd, 0x12, 0x13, 0x4); /* 4 */
-	ds325eu_set(fd, 0x12, 0x14, 0x2c00); /* 11264 */
-	ds325eu_set(fd, 0x12, 0x15, 0x1); /* 1 */
-	ds325eu_set(fd, 0x12, 0x16, 0x0); /* 0 */
-	ds325eu_set(fd, 0x12, 0x17, 0xef); /* 239 */
-	ds325eu_set(fd, 0x12, 0x18, 0x0); /* 0 */
-	ds325eu_set(fd, 0x12, 0x19, 0x13f); /* 319 */
-	reg1a |= 0x0400;
-	ds325eu_set(fd, 0x12, 0x1a, reg1a);
-	reg1b |= 0x0100; // turns laser on quickly! TODO: see what these do with a scope.
-	ds325eu_set(fd, 0x12, 0x1b, reg1b);
-	reg1b |= 0x0400; // some kind of auto-adjust for laser
-	ds325eu_set(fd, 0x12, 0x1b, reg1b);
-	reg1b |= 0x0800; // turns laser on sloooowly TODO: see what these do with a scope.
-	ds325eu_set(fd, 0x12, 0x1b, reg1b);
-	ds325eu_set(fd, 0x12, 0x1c, 0x5); /* 5 */
 
-	ds325eu_set(fd, 0x12, 0x20, 0x4b0); /* 0x4b0, 1200 */
+	/* number of pulses */
+	ds325eu_set(fd, 0x12, 0x13, 0x4); /* 4 */
+
+	/* framing controls, 76800 = 320x240 = 0x12c00 */
+	ds325eu_set(fd, 0x12, 0x14, 0x2c00); /* low: 11264 */
+	ds325eu_set(fd, 0x12, 0x15, 0x1); /* high: 1 */
+	ds325eu_set(fd, 0x12, 0x16, 0); /* 0 */
+	ds325eu_set(fd, 0x12, 0x17, 239); /* 239 */
+	ds325eu_set(fd, 0x12, 0x18, 0); /* 0 */
+	ds325eu_set(fd, 0x12, 0x19, 319); /* 319 */
+
+	reg1a |= 0x0400; // 0x400
+	ds325eu_set(fd, 0x12, 0x1a, reg1a);
+
+	reg1b |= 0x0100; // laser power pwm enable
+	ds325eu_set(fd, 0x12, 0x1b, reg1b);
+	reg1b |= 0x0400; // does something to the laser too?
+	ds325eu_set(fd, 0x12, 0x1b, reg1b);
+	reg1b |= 0x0800; // laser power switch
+	ds325eu_set(fd, 0x12, 0x1b, reg1b);
+
+	ds325eu_set(fd, 0x12, 0x1c, 0x5); /* 5 */
+	ds325eu_set(fd, 0x12, 0x20, 1200); /* 0x4b0, 1200 */
 	ds325eu_set(fd, 0x12, 0x27, 0x106); /* 0x106, 262 */
 
-	ds325eu_set(fd, 0x12, 0x28, 0x14d); /* laser intensity */
-	ds325eu_set(fd, 0x12, 0x29, 0xf0); /* 0xf0, 240 */
+	/* laser power (pwm), under <70% the filter inductor starts to spike off like crazy. */
+	ds325eu_set(fd, 0x12, 0x28, 333); /* default: 333, laser pwm cycle length, 12MHz clock */
+	ds325eu_set(fd, 0x12, 0x29, dutycycle); /* default: 240, laser pwm "off" time, 8bit*/
 
-	ds325eu_set(fd, 0x12, 0x2a, 0x14d); /* 333, seems to make no difference, is this the other laser? */
+	/* could be the second laser power (pwm)? */
+	ds325eu_set(fd, 0x12, 0x2a, 333); /* 333 */
+
 	ds325eu_set(fd, 0x12, 0x30, 0x0); /* 0 */
 	ds325eu_set(fd, 0x12, 0x31, 0x0); /* 0 */
 	ds325eu_set(fd, 0x12, 0x32, 0x0); /* 0 */
+
 	ds325eu_set(fd, 0x12, 0x3c, 0x2f); /* 47 */
-	ds325eu_set(fd, 0x12, 0x3d, 0x3e7); /* 999 */
+	ds325eu_set(fd, 0x12, 0x3d, 0x3e7); //0x3e7); /* 999 */ // if this is zero, the laser turns off after startup.
 	ds325eu_set(fd, 0x12, 0x3e, 0xf); /* 15 */
 	ds325eu_set(fd, 0x12, 0x3f, 0xf); /* 15 */
-	ds325eu_set(fd, 0x12, 0x40, 0x3e8); /* 1000 */
+	ds325eu_set(fd, 0x12, 0x40, 0x3e8); //0x3e8); /* 1000 */
+
 	ds325eu_set(fd, 0x12, 0x43, 0x109); /* 265 */
 	ds325eu_set(fd, 0x12, 0x1e, 0x8209); /* 33289 */
 	ds325eu_set(fd, 0x12, 0x1d, 0x119); /* 281 */
 	ds325eu_set(fd, 0x12, 0x44, 0x1e); /* 30 */
-	ds325eu_set(fd, 0x12, 0x1b, reg1b); /* 3328 */
-	reg1b |= 0x4000;
+	//ds325eu_set(fd, 0x12, 0x1b, reg1b); /* 3328 why write the same value again? */
+	reg1b |= 0x4000; // some kind of saturation?
 	ds325eu_set(fd, 0x12, 0x1b, reg1b); /* 19712 */
 	ds325eu_set(fd, 0x12, 0x45, 0x101); /* 257 */
 	ds325eu_set(fd, 0x12, 0x46, 0x2); /* 2 */
@@ -540,38 +640,34 @@ ds325eu_init(int fd, int modf_khz, int fps, int satur)
 	 *		0x2f
 	 */
 
-	/*
-	 *	why 4 repeats of the clock divider? theory:
-	 *		a clock for laser
-	 *		a delayed one for sensor integrator toggle
-	 *		a third one to clock sensor readout
-	 *		a fourth one to clock ADC
-	 *	TODO: verify with a scope
-	 *	we should probably not overclock the sensor and ADC
-	 *	what's the role of register 0x2f here?
-	 */
 	ds325eu_set(fd, 0x12, 0x2f, 0x60);
 	fdiv = (fdiv<<8) | fdiv;
 	ds325eu_set(fd, 0x12, 0x0, fdiv);
 	ds325eu_set(fd, 0x12, 0x1, fdiv);
 	ds325eu_set(fd, 0x12, 0x2f, 0x60);
 
-	ds325eu_set(fd, 0x12, 0x3, 0x0); /* phase adj? */
+	/* these remain a mystery, and have great impact on the output. */
+	ds325eu_set(fd, 0x12, 0x3, 0x00); /* phase adj? */
 	ds325eu_set(fd, 0x12, 0x4, 0x30); /* phase adj? */
 	ds325eu_set(fd, 0x12, 0x5, 0x60); /* phase adj? */
 	ds325eu_set(fd, 0x12, 0x6, 0x90); /* phase adj? */
+
+	/* repeats for a second laser? */
 	ds325eu_set(fd, 0x12, 0x7, 0x0); /* 0 */
 	ds325eu_set(fd, 0x12, 0x8, 0x0); /* 0 */
 	ds325eu_set(fd, 0x12, 0x9, 0x0); /* 0 */
 	ds325eu_set(fd, 0x12, 0xa, 0x0); /* 0 */
-	ds325eu_set(fd, 0x12, 0x2, 0x0); /* why is this one out of order? */
+
+	ds325eu_set(fd, 0x12, 0x2, 0x0); /* and why is this one out of order? */
+
 	ds325eu_set(fd, 0x12, 0xb, 0xea60); /* 60000 */
 	ds325eu_set(fd, 0x12, 0xc, 0x0); /* 0 */
-	ds325eu_set(fd, 0x12, 0xd, 0x4740); /* 18240 */
+	ds325eu_set(fd, 0x12, 0xd, 0x4740); //0x4740); /* 18240 */
 	ds325eu_set(fd, 0x12, 0xe, 0x0); /* 0 */
 	ds325eu_set(fd, 0x12, 0xf, 0x0); /* 0 */
 	ds325eu_set(fd, 0x12, 0x10, 0x0); /* 0 */
-	ds325eu_set(fd, 0x12, 0x11, 0x1e0); /* 480 */
+
+	ds325eu_set(fd, 0x12, 0x11, 480); //0x1e0); /* 480 */
 
 	if(fps == 50 || fps == 60){
 		ds325eu_set(fd, 0x12, 0x12, 0x2); /* 2 */
@@ -622,18 +718,49 @@ main(int argc, char *argv[])
 	int *depth_buf_lens;
 	int ncolor_bufs;
 	int ndepth_bufs;
-	int opt;
+	int i, opt;
+	int modfreq = 50000;
+	int dutycycle = -1;
+	int fps = 60;
 
-	while((opt = getopt(argc, argv, "dc")) != -1){
+	while((opt = getopt(argc, argv, "d:c:m:i:f:")) != -1){
 		switch (opt) {
+		case 'f':
+			fps = strtol(optarg, NULL, 10);
+			if(fps != 25 && fps != 30 && fps != 50 && fps != 60)
+				goto caseusage;
+			break;
+		case 'i':
+			dutycycle = strtol(optarg, NULL, 10);
+			if(dutycycle < 150 || dutycycle > 255)
+				goto caseusage;
+			break;
+		case 'm':
+			modfreq = strtol(optarg, NULL, 10);
+			if(ds325eu_freqdiv(modfreq) == -1)
+				goto caseusage;
+			break;
 		case 'c':
-			cflag = 1;
+			if(!strcmp(optarg, "-"))
+				color_dev = NULL;
+			else
+				color_dev = optarg;
 			break;
 		case 'd':
-			dflag = 1;
+			if(!strcmp(optarg, "-"))
+				depth_dev = NULL;
+			else
+				depth_dev = optarg;
 			break;
 		default:
-			fprintf(stderr, "usage: %s [-dc]\nn", argv[0]);
+		caseusage:
+			fprintf(stderr, "usage: %s [-c /dev/videok] [-d /dev/videoj] [-m modfreq_khz] [-i dutycycle] [-f fps]\n", argv[0]);
+			fprintf(stderr, "	default modfreq_khz: 50000, feasible ones:");
+			for(i = 0x08; i <= 0x18; i++)
+				fprintf(stderr, " %d", 600000/i);
+			fprintf(stderr, "\n");
+			fprintf(stderr, "	default dutycycle: 240, use not advised, will do 150 to 255\n");
+			fprintf(stderr, "	default fps: 25, supported: 25 30 50 60\n");
 			exit(1);
 		}
 	}
@@ -641,35 +768,39 @@ main(int argc, char *argv[])
 	x11_fd = x11init();
 
 	color_fd = -1;
-	if(!cflag){
-		color_fd = devopen("/dev/video0", 30);
+	if(color_dev != NULL){
+		color_fd = devopen(color_dev, 30);
 		devmap(color_fd, &color_bufs, &color_buf_lens, &ncolor_bufs);
 		devstart(color_fd);
 	}
 
 	depth_fd = -1;
-	if(!dflag){
-		int r, fps;
-		fps = 25;
-		depth_fd = devopen("/dev/video1", fps);
+	if(depth_dev != NULL){
+		int r;
+		depth_fd = devopen(depth_dev, fps);
 		devmap(depth_fd, &depth_bufs, &depth_buf_lens, &ndepth_bufs);
 		devstart(depth_fd);
+		realsense_laserpower(depth_fd);
+
+/*
 		for(;;){
 			r = ds325eu_get(depth_fd, 0x12, 0x21);
 			if(r == 0xffff)
 				continue;
 			fprintf(stderr, "got %x, now we go!\n", r);
-			ds325eu_init(depth_fd, 50000, fps, 0);
+			ds325eu_init(depth_fd, modfreq, fps, 0, dutycycle);
 			break;
 		}
+*/
 	}
 
+#if 0
 	ds325eu_dump(depth_fd);
-
 	int frame = 0;
 	int reg1a, reg1b;
 	reg1a = ds325eu_get(depth_fd, 0x12, 0x1a);
 	reg1b = ds325eu_get(depth_fd, 0x12, 0x1b);
+#endif
 
 	for(;;){
 		struct timeval tv;
@@ -695,13 +826,18 @@ main(int argc, char *argv[])
 			warn("select");
 
 		if(depth_fd != -1 && FD_ISSET(depth_fd, &rset)){
-			frame++;
 			devinput(depth_fd, depth_bufs);
-			if(0 || (frame & 0x3f) == 0x3f){
-				reg1b ^= 0x0100;
+
+
+#if 0
+			frame++;
+			if(0 || (frame & 0x1ff) == 0x1ff){
+				reg1b ^= 0x0800;
 				fprintf(stderr, "reg1b: %x\n", reg1b);
 				ds325eu_set(depth_fd, 0x12, 0x1b, reg1b);
 			}
+#endif
+
 		}
 
 		if(color_fd != -1 && FD_ISSET(color_fd, &rset)){
@@ -710,7 +846,6 @@ main(int argc, char *argv[])
 
 		if(x11_fd != -1)
 			x11serve(x11_fd);
-
 
 
 //ds325eu_accel(depth_fd);

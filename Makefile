@@ -1,8 +1,9 @@
 
 .PHONY: libs
 
-CFLAGS=-O3 -fomit-frame-pointer -ffast-math -W -Wall -Ilibs/include
-#CFLAGS=-g -W -Wall -Ilibs/include
+CFLAGS=-O3 -fomit-frame-pointer -W -Wall -Ilibs/include
+#CFLAGS=-O2 -g -W -Wall -Ilibs/include
+#CFLAGS=-O2 -W -Wall -Ilibs/include
 
 LIBS=\
 	-lX11\
@@ -11,7 +12,10 @@ LIBS=\
 	 -lturbojpeg\
 
 OBJS=\
+	contour.o\
+	fitpoly.o\
 	ds325.o\
+	drawtri.o\
 	x11.o\
 
 ds325: $(OBJS)
