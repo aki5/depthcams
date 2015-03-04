@@ -1,13 +1,4 @@
-#include <stdio.h>
-#include <stdarg.h>
-#include <stdlib.h>
-#include <errno.h>
-#include <string.h>
-#include <ctype.h>
-
-#include <unistd.h>
-#include <fcntl.h>
-
+#include "os.h"
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <asm/types.h>
@@ -16,10 +7,8 @@
 #include <linux/usb/video.h>
 #include <math.h>
 
+#include "process.h"
 #include "draw3.h"
-
-
-#define nelem(x) (int)(sizeof(x)/sizeof(x[0]))
 
 char *color_dev = "/dev/video0";
 char *depth_dev = "/dev/video1";
@@ -96,7 +85,7 @@ devopen(char *name, int fps)
 			break;
 		fprintf(stderr, "format desc '%s'\n", fmtdesc.description);
 		fprintf(stderr, "format fourcc '%x'\n", fmtdesc.pixelformat);
-		fprintf(stderr, "format sizes ", fmtdesc.pixelformat);
+		fprintf(stderr, "format sizes ");
 		for(j = 0;; j++){
 			frmsize.pixel_format = fmtdesc.pixelformat;
 			frmsize.index = j;
@@ -226,13 +215,12 @@ devwork(void *arg)
 	Bufwork *work;
 	struct v4l2_buffer *bufd;
 	uchar *buf;
-	int fd, len;
+	int fd;
 
 	work = (Bufwork*)arg;
 	buf = work->buf;
 	bufd = &work->bufd;
 	fd = work->fd;
-	len = work->len;
 
 	if(fd == depth_fd){
 		if(!work->badframe)
@@ -498,55 +486,6 @@ v3normalizef(float *v)
 }
 
 void
-ds325_dirs(float *dirs)
-{
-	/* they say it is 74° x 58° x 87° (w x h x d) */
-	float x, y, z;
-	float theta;
-	int i;
-
-	theta = 74.0f/180.0f*M_PI;
-	z = (0.5f * 320.0f) / tanf(0.5f*theta);
-	for(y = -120.0f; y < 120.0f; y += 1.0f){
-		for(x = -160.0f; x < 320.0f; x += 1.0f){
-			dirs[3*i+0] = x;
-			dirs[3*i+1] = y;
-			dirs[3*i+2] = z;
-			v3normalizef(dirs + 3*i);
-		}
-	}
-}
-
-void
-ds325_depth(uchar *dmap, float *dirs, float *pos, float *val)
-{
-	const float phase2dst = 0.5f * 299792458.0f/(2.0f*M_PI*50e6f);
-	float I[8], Q[8];
-	float th[8];
-	float dst;
-	int i, j, k;
-	float x, y;
-
-	x = 0.0f;
-	y = 0.0f;
-	for(j = 0; j < 320*240; j += 320, y += 1.0f){
-		/* each row has 20 32-byte blocks */
-		for(i = 0; i < 320; i += 16, y += 16.0f){
-			get8f(dmap + 2*(j+i), I);
-			get8f(dmap + 2*(j+i) + 16, Q);
-			for(k = 0; k < 8; k++){
-				th[k] = atan2f(Q[k], I[k]);
-				th[k] = phase2dst * (th[k] < 0.0f ? -th[k] : 2.0f*M_PI-th[k]);
-				pos[3*(i+j+k)+0] = dirs[3*(i+j+k)+0] * th[k];
-				pos[3*(i+j+k)+1] = dirs[3*(i+j+k)+1] * th[k];
-				pos[3*(i+j+k)+2] = dirs[3*(i+j+k)+2] * th[k];
-				val[j+i] = sqrtf(Q[k]*Q[k] + I[k]*I[k]);
-			}
-		}
-	}
-}
-
-void
 ds325eu_init(int fd, int modfreq_khz, int fps, int satur, int dutycycle)
 {
 	int reg1a, reg1b;
@@ -776,7 +715,6 @@ main(int argc, char *argv[])
 
 	depth_fd = -1;
 	if(depth_dev != NULL){
-		int r;
 		depth_fd = devopen(depth_dev, fps);
 		devmap(depth_fd, &depth_bufs, &depth_buf_lens, &ndepth_bufs);
 		devstart(depth_fd);
@@ -806,6 +744,7 @@ main(int argc, char *argv[])
 		struct timeval tv;
 		fd_set rset;
 		int max_fd;
+		int diddraw;
 
 		FD_ZERO(&rset);
 		if(color_fd != -1)
@@ -825,24 +764,21 @@ main(int argc, char *argv[])
 		if(select(max_fd+1, &rset, NULL, NULL, &tv) == -1)
 			warn("select");
 
-		if(depth_fd != -1 && FD_ISSET(depth_fd, &rset)){
-			devinput(depth_fd, depth_bufs);
-
-
-#if 0
-			frame++;
-			if(0 || (frame & 0x1ff) == 0x1ff){
-				reg1b ^= 0x0800;
-				fprintf(stderr, "reg1b: %x\n", reg1b);
-				ds325eu_set(depth_fd, 0x12, 0x1b, reg1b);
+		diddraw = 0;
+		if(!drawbusy()){
+			if(depth_fd != -1 && FD_ISSET(depth_fd, &rset)){
+				devinput(depth_fd, depth_bufs);
+				diddraw = 1;
 			}
-#endif
 
+			if(color_fd != -1 && FD_ISSET(color_fd, &rset)){
+				devinput(color_fd, color_bufs);
+				diddraw = 1;
+			}
 		}
 
-		if(color_fd != -1 && FD_ISSET(color_fd, &rset)){
-			devinput(color_fd, color_bufs);
-		}
+		if(diddraw)
+			drawflush();
 
 		if(draw_fd != -1)
 			drawhandle(draw_fd, 0);
