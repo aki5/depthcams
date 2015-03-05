@@ -44,9 +44,11 @@ process_depth(uchar *dmap, int w, int h)
 	cliph = h < height ? h : height;
 	memset(framebuffer, 0, stride*cliph);
 
+	//fprintf(stderr, "## start polygen\n");
 	initcontour(&contr, cimg, w, h);
-	for(j = 0; j < Nloops; j++){
+	for(j = 0; j < 5; j++){
 		resetcontour(&contr);
+		int k = 0;
 		while((npt = nextcontour(&contr, pt, apt)) != -1){
 			short *a, *b, *c;
 			int poly[64];
@@ -58,7 +60,7 @@ process_depth(uchar *dmap, int w, int h)
 				continue;
 			}
 			npoly = fitpoly(poly, nelem(poly), pt, npt, 5);
-			if(npoly == nelem(poly) || npoly < 2)
+			if(npoly == nelem(poly) || npoly < 3)
 				continue;
 
 			area = 0;
@@ -68,20 +70,9 @@ process_depth(uchar *dmap, int w, int h)
 				c = pt + 2*poly[i+1];
 				area += ori2i(b, c, a);
 			}
-#if 0
-			if(npoly == 4){
-				a = pt + 2*poly[0];
-				b = pt + 2*poly[1];
-				c = pt + 2*poly[2];
-				d = pt + 2*poly[3];
-				if(ori2i(a, b, c) < 0 && ori2i(b, c, d) < 0 && ori2i(c, d, a) < 0 && ori2i(d, a, b) < 0){
-					fixcontour(&contr, pt, npt);
-					drawpoly(framebuffer, width, cliph, pt, poly, npoly, poscolor);
-				}
-			}
-#else
-
-			if(area > 0 && npoly >= 3){
+			if(area <= 0)
+				continue;
+			if(npoly >= 3){
 				fixcontour(&contr, pt, npt);
 				if(1)if(drawpoly(framebuffer, width, cliph, pt, poly, npoly, poscolor) == -1){
 					for(i = 0; i < npt; i++){
@@ -93,26 +84,26 @@ process_depth(uchar *dmap, int w, int h)
 					}
 				}
 			}
-#endif
+			k++;
 		}
+		//fprintf(stderr, "found %d positive polygons.\n", k);
 		erodecontour(&contr);
 	}
 
 	initcontour(&contr, dimg, w, h);
-	for(j = 0; j < Nloops; j++){
+	for(j = 0; j < 10; j++){
 		resetcontour(&contr);
+		int k = 0;
 		while((npt = nextcontour(&contr, pt, apt)) != -1){
 			short *a, *b, *c;
 			int poly[64];
 			int npoly;
 			long long area;
 
-			if(npt == apt || npt > w+h){
-				//fprintf(stderr, "too long a contour!\n");
+			if(npt == apt || npt >2*(w+h)-16)
 				continue;
-			}
 			npoly = fitpoly(poly, nelem(poly), pt, npt, 5);
-			if(npoly == nelem(poly) || npoly < 2)
+			if(npoly == nelem(poly) || npoly < 3)
 				continue;
 
 			area = 0;
@@ -122,23 +113,11 @@ process_depth(uchar *dmap, int w, int h)
 				c = pt + 2*poly[i+1];
 				area += ori2i(b, c, a);
 			}
-#if 0
-			if(npoly == 4){
-				short *a, *b, *c, *d;
-				a = pt + 2*poly[0];
-				b = pt + 2*poly[1];
-				c = pt + 2*poly[2];
-				d = pt + 2*poly[3];
-				if(ori2i(a, b, c) < 0 && ori2i(b, c, d) < 0 && ori2i(c, d, a) < 0 && ori2i(d, a, b) < 0){
-					fixcontour(&contr, pt, npt);
-					drawtri(framebuffer, width, cliph, a, b, c, negcolor);
-					drawtri(framebuffer, width, cliph, a, c, d, negcolor);
-				}
-			}
-#else
-			if(area > 0 && npoly >= 3){
+			if(area <= 0)
+				continue;
+			if(npoly >= 3){
 				fixcontour(&contr, pt, npt);
-				if(0)if(drawpoly(framebuffer, width, cliph, pt, poly, npoly, negcolor) == -1){
+				if(1)if(drawpoly(framebuffer, width, cliph, pt, poly, npoly, negcolor) == -1){
 					for(i = 0; i < npt; i++){
 						int off = pt[2*i+1]*stride + 4*pt[2*i+0];
 						framebuffer[off+0] = 0xff;
@@ -148,7 +127,8 @@ process_depth(uchar *dmap, int w, int h)
 					}
 				}
 			}
-#endif
+			k++;
+			//fprintf(stderr, "found %d negative polygons\n", k);
 		}
 		erodecontour(&contr);
 	}
