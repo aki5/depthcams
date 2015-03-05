@@ -209,6 +209,8 @@ struct Bufwork {
 	int badframe;
 };
 
+int bugger;
+
 void *
 devwork(void *arg)
 {
@@ -224,7 +226,8 @@ devwork(void *arg)
 
 	if(fd == depth_fd){
 		if(!work->badframe)
-			process_depth(buf, 640, 480);
+			if(process_depth(buf, 640, 480) == -1)
+				bugger = 1;
 	}
 	if(fd == color_fd){
 		if(!work->badframe)
@@ -323,7 +326,7 @@ realsense_laserpower(int fd)
 	ctrl.selector = PROPERTY_IVCAM_LASER_POWER;
 	ctrl.query = UVC_SET_CUR;
 	ctrl.size = 1;
-	val = 16; /* 0 to 16, 7 was reasonable for calib */
+	val = 7; /* 0 to 16, 7 was reasonable for calib */
 	ctrl.data = &val;
 	if(ioctl(fd, UVCIOC_CTRL_QUERY, &ctrl) == -1)
 		warn("realsense laser power fd %d", fd);
@@ -765,7 +768,7 @@ main(int argc, char *argv[])
 			warn("select");
 
 		diddraw = 0;
-		if(!drawbusy()){
+		if(!drawbusy() && !bugger){
 			if(depth_fd != -1 && FD_ISSET(depth_fd, &rset)){
 				devinput(depth_fd, depth_bufs);
 				diddraw = 1;
@@ -780,8 +783,12 @@ main(int argc, char *argv[])
 		if(diddraw)
 			drawflush();
 
-		if(draw_fd != -1)
-			drawhandle(draw_fd, 0);
+		if(draw_fd != -1){
+			int r;
+			r = drawhandle(draw_fd, 0);
+			if(r & 4)
+				bugger = 0;
+		}
 
 
 //ds325eu_accel(depth_fd);

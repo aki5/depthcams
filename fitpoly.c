@@ -1,5 +1,7 @@
 
+#include "os.h"
 #include "fitpoly.h"
+#include "draw3.h"
 
 static inline int
 ptptdst2(short *a, short *b)
@@ -27,7 +29,7 @@ muldiv(int a, int p, int q)
 }
 
 static inline int
-lnptdst2(short *a, short *b, short *p)
+ptsegdst2(short *p, short *a, short *b)
 {
 	short ap[2], ab[2];
 	short ortpr[2];
@@ -82,12 +84,13 @@ findcenter(short *points, int npoints, short *c)
 
 /*
  *	do iterative refinement instead of iterative simplification
- *	works well when apoly is small.
+ *	works well for small apoly.
  *
  *	1. find farthest point(1) from the center of points.
  *	2. find farthest point(2) from point(1). 
  *	3. we now have a (degenerate) polygon of two points
- *	4. repeatedly add the point with maximum distance from its corresponding polygon segment
+ *	4. repeatedly add the point with maximum distance to its current polygon segment,
+ *	   but the generated segments must not intersect any of the old segments
  */ 
 int
 fitpoly(int *poly, int apoly, short *pt, int npt, int dstthr)
@@ -125,19 +128,22 @@ fitpoly(int *poly, int apoly, short *pt, int npt, int dstthr)
 		b = poly[pi];
 		for(i = 0; i < npt; i++){
 			if(i == b){
-				// step the lineseg we are measuring from
+				// step the seg we are measuring against
 				pi = pi == npoly-1 ? 0 : pi + 1;
 				a = b;
 				b = poly[pi];
 			}
-			dst2 = lnptdst2(pt + 2*a, pt + 2*b, pt + 2*i);
-			if(dst2 > maxdst2){
+			dst2 = ptsegdst2(pt + 2*i, pt + 2*a, pt + 2*b);
+			if(dst2 > maxdst2 && polysegisect(pt, poly, npoly, a, i) == 0 && polysegisect(pt, poly, npoly, i, b) == 0){
 				maxdst2 = dst2;
 				maxi = i;
 			}
 		}
+		if(maxdst2 == -1)
+			return -1;
 		if(maxdst2 < dstthr*dstthr)
 			 goto out;
+
 		sortput(poly, npoly, maxi);
 		npoly++;
 	}

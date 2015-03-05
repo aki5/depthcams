@@ -9,7 +9,6 @@ LIBS=\
 	-lX11\
 	 -lXext\
 	 -lm\
-	 -lturbojpeg\
 
 OBJS=\
 	contour.o\
