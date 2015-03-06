@@ -241,7 +241,7 @@ erodecontour(Contour *cp)
 }
 
 void
-fixcontour(Contour *cp, short *pt, int npt)
+setcontour(Contour *cp, short *pt, int npt, int bit)
 {
 	uchar *img;
 	int i, off, width;
@@ -249,6 +249,19 @@ fixcontour(Contour *cp, short *pt, int npt)
 	width = cp->width;
 	for(i = 0; i < npt; i++){
 		off = pt[2*i+1]*width + pt[2*i+0];
-		img[off] |= Ffix;
+		img[off] |= bit;
+	}
+}
+
+void
+clearcontour(Contour *cp, short *pt, int npt, int bit)
+{
+	uchar *img;
+	int i, off, width;
+	img = cp->img;
+	width = cp->width;
+	for(i = 0; i < npt; i++){
+		off = pt[2*i+1]*width + pt[2*i+0];
+		img[off] &= ~bit;
 	}
 }

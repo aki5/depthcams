@@ -326,7 +326,7 @@ realsense_laserpower(int fd)
 	ctrl.selector = PROPERTY_IVCAM_LASER_POWER;
 	ctrl.query = UVC_SET_CUR;
 	ctrl.size = 1;
-	val = 7; /* 0 to 16, 7 was reasonable for calib */
+	val = 16; /* 0 to 16, 7 was reasonable for calib */
 	ctrl.data = &val;
 	if(ioctl(fd, UVCIOC_CTRL_QUERY, &ctrl) == -1)
 		warn("realsense laser power fd %d", fd);
@@ -664,6 +664,8 @@ main(int argc, char *argv[])
 	int modfreq = 50000;
 	int dutycycle = -1;
 	int fps = 60;
+
+
 
 	while((opt = getopt(argc, argv, "d:c:m:i:f:")) != -1){
 		switch (opt) {

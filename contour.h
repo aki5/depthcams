@@ -21,4 +21,5 @@ void initcontour(Contour *cp, uchar *img, int width, int height);
 int nextcontour(Contour *cp, short *pt, int apt);
 void resetcontour(Contour *cp);
 void erodecontour(Contour *cp);
-void fixcontour(Contour *cp, short *pt, int npt);
+void setcontour(Contour *cp, short *pt, int npt, int bit);
+void clearcontour(Contour *cp, short *pt, int npt, int bit);
