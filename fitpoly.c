@@ -58,13 +58,14 @@ ptsegdst2(short *p, short *a, short *b)
 	return ptptdst2(ortpr, p);
 }
 
-static inline void
+static inline int
 sortput(int *tab, int len, int val)
 {
 	int j;
 	for(j = len-1; j >= 0 && val < tab[j]; j--)
 		tab[j+1] = tab[j];
 	tab[j+1] = val;
+	return j+1;
 }
 
 static inline void
@@ -82,6 +83,38 @@ findcenter(short *points, int npoints, short *c)
 	c[1] = c1 / npoints;	
 }
 
+static inline int
+findmaxdst2(short *pt, int npt, int a, int b, int *maxip, int *maxdst2p)
+{
+	short *pa, *pb, *pi;
+	int dst2, maxdst2;
+	int i, maxi;
+
+	maxdst2 = -1;
+	maxi = -1;
+	for(i = a+1; i < npt; i++){
+		if(i == b)
+			break;
+		dst2 = ptsegdst2(pt + 2*i, pt + 2*a, pt + 2*b);
+		if(dst2 > maxdst2){
+			maxdst2 = dst2;
+			maxi = i;
+		}
+	}
+	if(i == npt){
+		for(i = 0; i != b; i++){
+			dst2 = ptsegdst2(pt + 2*i, pt + 2*a, pt + 2*b);
+			if(dst2 > maxdst2){
+				maxdst2 = dst2;
+				maxi = i;
+			}
+		}
+	}
+	*maxdst2p = maxdst2;
+	*maxip = maxi;
+	return maxi == -1 ? -1 : 0;
+}
+
 /*
  *	do iterative refinement instead of iterative simplification
  *	works well for small apoly.
@@ -95,10 +128,13 @@ findcenter(short *points, int npoints, short *c)
 int
 fitpoly(int *poly, int apoly, short *pt, int npt, int dstthr)
 {
-	int i, j, npoly, pi;
+	int i, j, npoly, pi, ni;
 	int dst2, maxdst2, maxi;
 	int a, b;
 	short cntr[2], *cpt = cntr;
+
+	int polymaxi[apoly];
+	int polymaxdst2[apoly];
 
 	findcenter(pt, npt, cpt);
 	npoly = 0;
@@ -119,7 +155,12 @@ fitpoly(int *poly, int apoly, short *pt, int npt, int dstthr)
 		cpt = pt + 2*maxi;
 	}
 
+	findmaxdst2(pt, npt, poly[1], poly[0], polymaxi+1, polymaxdst2+1);
+	findmaxdst2(pt, npt, poly[0], poly[1], polymaxi+0, polymaxdst2+0);
+
 	while(npoly < apoly){
+
+#if 0
 		maxi = -1;
 		maxdst2 = -1;
 		pi = npoly-1;
@@ -134,18 +175,37 @@ fitpoly(int *poly, int apoly, short *pt, int npt, int dstthr)
 				b = poly[pi];
 			}
 			dst2 = ptsegdst2(pt + 2*i, pt + 2*a, pt + 2*b);
-			if(dst2 > maxdst2 && polysegisect(pt, poly, npoly, a, i) == 0 && polysegisect(pt, poly, npoly, i, b) == 0){
+			if(dst2 > maxdst2){// && polysegisect(pt, poly, npoly, a, i) == 0 && polysegisect(pt, poly, npoly, i, b) == 0){
 				maxdst2 = dst2;
 				maxi = i;
 			}
 		}
+#else
+		int maxi2 = -1;
+		int maxd2 = -1;
+		for(i = 0; i < npoly; i++){
+			if(polymaxdst2[i] > maxd2){
+				maxd2 = polymaxdst2[i];
+				maxi2 = polymaxi[i];
+			}
+		}
+		maxi = maxi2;
+		maxdst2 = maxd2;
+#endif
 		if(maxdst2 == -1)
 			return -1;
 		if(maxdst2 < dstthr*dstthr)
 			 goto out;
 
-		sortput(poly, npoly, maxi);
+		i = sortput(poly, npoly, maxi);
+		memmove(polymaxi+i+1, polymaxi+i, (npoly-i) * sizeof polymaxi[0]);
+		memmove(polymaxdst2+i+1, polymaxdst2+i, (npoly-i) * sizeof polymaxdst2[0]);
 		npoly++;
+
+		pi = (i+npoly-1) % npoly;
+		ni = (i+1) % npoly;
+		findmaxdst2(pt, npt, poly[pi], poly[i], polymaxi+pi, polymaxdst2+pi);
+		findmaxdst2(pt, npt, poly[i], poly[ni], polymaxi+i, polymaxdst2+i);
 	}
 out:
 	return npoly;

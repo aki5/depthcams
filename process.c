@@ -10,6 +10,39 @@ getu16(uchar *p)
 	return (p[1]<<8)|p[0];
 }
 
+static void
+polyreverse(int *poly, int npoly)
+{
+	int i, tmp;
+	for(i = 0; i < npoly/2; i++){
+		int tmp;
+		tmp = poly[npoly-1-i];
+		poly[npoly-1-i] = poly[i];
+		poly[i] = tmp;
+	}
+}
+
+static void
+ptreverse(short *pt, int npt)
+{
+	int i;
+	for(i = 0; i < npt/2; i++){
+		short tmp;
+		tmp = pt[2*i+0];
+		pt[2*i+0] = pt[2*(npt-1-i)+0];
+		pt[2*(npt-1-i)+0] = tmp;
+		tmp = pt[2*i+1];
+		pt[2*i+1] = pt[2*(npt-1-i)+1];
+		pt[2*(npt-1-i)+1] = tmp;
+	}
+}
+
+static int
+revb(int a)
+{
+	return ((a&1)<<7) |((a&2)<<5) |((a&4)<<3) |((a&8)<<1);
+}
+
 int
 process_depth(uchar *dmap, int w, int h)
 {
@@ -41,14 +74,28 @@ process_depth(uchar *dmap, int w, int h)
 	uchar negcolor[4] = { 0xff, 0x30, 0x50, 0xff };
 	uchar color[4];
 
-	enum { MaxError = 4 };
+	enum { MaxError = 3 };
 
 	cliph = h < height ? h : height;
 	memset(framebuffer, 0, stride*cliph);
 
-	//fprintf(stderr, "## start polygen\n");
-	Tess postess;
+	Tess postess, negtess;
 	inittess(&postess);
+	inittess(&negtess);
+
+	/* negative polygon needs to have something to subtract from */
+	tessaddpoly(
+		&negtess,
+		(short[]){
+			0,0,
+			0,cliph-1,
+			width-1,cliph-1,
+			width-1,0
+		},
+		(int[]){0, 1, 2, 3},
+		4
+	);
+
 	initcontour(&contr, cimg, w, h);
 	for(j = 0; j < 1; j++){
 		resetcontour(&contr);
@@ -56,7 +103,7 @@ process_depth(uchar *dmap, int w, int h)
 		while((npt = nextcontour(&contr, pt, apt)) != -1){
 			short *a, *b;
 			short orig[2] = { -1, -1 };
-			int poly[256];
+			int poly[512];
 			int npoly;
 
 			if(npt == apt){
@@ -75,8 +122,11 @@ process_depth(uchar *dmap, int w, int h)
 					continue;
 				}
 				tessaddpoly(&postess, pt, poly, npoly);
+				polyreverse(poly, npoly);
+				tessaddpoly(&negtess, pt, poly, npoly);
+
 				setcontour(&contr, pt, npt, Ffix);
-				if(0)if(drawpoly(framebuffer, width, cliph, pt, poly, npoly, poscolor) == -1){
+				if(0)if(drawpoly(framebuffer, width, cliph, pt, poly, npoly, poscolor, 0) == -1){
 					for(i = 0; i < npt; i++){
 						int off = pt[2*i+1]*stride + 4*pt[2*i+0];
 						framebuffer[off+0] = 0xff;
@@ -86,16 +136,7 @@ process_depth(uchar *dmap, int w, int h)
 					}
 				}
 			} else {
-
-				for(i = 0; i < npt/2; i++){
-					short tmp;
-					tmp = pt[2*i+0];
-					pt[2*i+0] = pt[2*(npt-1-i)+0];
-					pt[2*(npt-1-i)+0] = tmp;
-					tmp = pt[2*i+1];
-					pt[2*i+1] = pt[2*(npt-1-i)+1];
-					pt[2*(npt-1-i)+1] = tmp;
-				}
+				ptreverse(pt, npt);
 				npoly = fitpoly(poly, nelem(poly), pt, npt, MaxError);
 				if(npoly == nelem(poly) || npoly < 3)
 					continue;
@@ -103,12 +144,8 @@ process_depth(uchar *dmap, int w, int h)
 					fprintf(stderr, "bugger! orientation of poly different from pt!\n");
 					continue;
 				}
-				for(i = 0; i < npoly/2; i++){
-					int tmp;
-					tmp = poly[npoly-1-i];
-					poly[npoly-1-i] = poly[i];
-					poly[i] = tmp;
-				}
+				tessaddpoly(&negtess, pt, poly, npoly);
+				polyreverse(poly, npoly);
 				tessaddpoly(&postess, pt, poly, npoly);
 				continue;
 			}
@@ -127,75 +164,27 @@ process_depth(uchar *dmap, int w, int h)
 	if((ntris = tesstris(&postess, &pt)) != -1){
 		for(i = 0; i < ntris; i++){
 			idx2color(i, color);
-			drawtri(framebuffer, width, cliph, pt+6*i+0, pt+6*i+2, pt+6*i+4, color);
+
+			memcpy(color, poscolor, sizeof color);
+			drawtri(framebuffer, width, cliph, pt+6*i+0, pt+6*i+2, pt+6*i+4, color, 0);
 		}
 		free(pt);
 	} else {
 		fprintf(stderr, "tesstris fail\n");
 	}
+	if((ntris = tesstris(&negtess, &pt)) != -1){
+		for(i = 0; i < ntris; i++){
+			idx2color(i, color);
 
-	freetess(&postess);
-/*
-*/
-/*
-
-	int ntris;
-	ntris = tesstris(&postess, &pt);
-	for(i = 0; i < ntris; i++)
-		drawtri(framebuffer, width, cliph, pt+6*i+0, pt+6*i+2, pt+6*i+4, poscolor);
-
-	free(pt);
-	ntris = tesstris(&negtess, &pt);
-	for(i = 0; i < ntris; i++)
-		drawtri(framebuffer, width, cliph, pt+6*i+0, pt+6*i+2, pt+6*i+4, negcolor);
-	free(pt);
-	freetess(&negtess);
-*/
-
-/*
-	initcontour(&contr, dimg, w, h);
-	for(j = 0; j < 10; j++){
-		resetcontour(&contr);
-		int k = 0;
-		while((npt = nextcontour(&contr, pt, apt)) != -1){
-			short *a, *b, *c;
-			int poly[64];
-			int npoly;
-			long long area;
-
-			if(npt == apt || npt >2*(w+h)-16)
-				continue;
-			npoly = fitpoly(poly, nelem(poly), pt, npt, 5);
-			if(npoly == nelem(poly) || npoly < 3)
-				continue;
-
-			area = 0;
-			a = pt + 2*poly[0];
-			for(i = 1; i < npoly-1; i++){
-				b = pt + 2*poly[i];
-				c = pt + 2*poly[i+1];
-				area += ori2i(b, c, a);
-			}
-			if(area <= 0)
-				continue;
-			if(npoly >= 3){
-				setcontour(&contr, pt, npt, Ffix);
-				if(1)if(drawpoly(framebuffer, width, cliph, pt, poly, npoly, negcolor) == -1){
-					for(i = 0; i < npt; i++){
-						int off = pt[2*i+1]*stride + 4*pt[2*i+0];
-						framebuffer[off+0] = 0xff;
-						framebuffer[off+1] = 0xff;
-						framebuffer[off+2] = 0xff;
-						framebuffer[off+3] = 0xff;
-					}
-				}
-			}
-			k++;
-			//fprintf(stderr, "found %d negative polygons\n", k);
+			memcpy(color, negcolor, sizeof color);
+			drawtri(framebuffer, width, cliph, pt+6*i+0, pt+6*i+2, pt+6*i+4, color, 0);
 		}
-		erodecontour(&contr);
+		free(pt);
+	} else {
+		fprintf(stderr, "tesstris fail\n");
 	}
-*/
+	freetess(&postess);
+	freetess(&negtess);
 
 	if(bugger)
 		return -1;

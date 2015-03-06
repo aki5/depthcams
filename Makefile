@@ -2,9 +2,6 @@
 .PHONY: libs
 
 CFLAGS=-O3
-#CFLAGS=-O3 -fomit-frame-pointer -W -Wall -Ilibs/include -I../libdraw3 -I../libtess2
-#CFLAGS=-g -W -Wall -Ilibs/include -I../libdraw3 -I../libtess2
-#CFLAGS=-O2 -W -Wall -Ilibs/include -I../libdraw3 -I../libtess2
 
 LIBS=\
 	-lX11\
