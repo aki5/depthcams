@@ -1,8 +1,7 @@
 
 enum {
-	Fset = 1,
-	Fcont = 2,
-	Ffix = 4,
+	Fset = 0x40,
+	Fcont = 0x80,
 };
 
 typedef unsigned char uchar;

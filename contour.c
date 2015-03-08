@@ -146,11 +146,11 @@ nextcontour(Contour *cp, short *pt, int apt, int fillrule)
 			break;
 		if(flags == (Fset|Fcont))
 			while(off < end){
-				if((off&3) == 3) off = skip4_set(img, off+1, end); else
+				//if((off&3) == 3) off = skip4_set(img, off+1, end); else
 				if((img[++off] & Fset) == 0)
 					break;
 			}
-		if((off&3) == 3) off = skip4_unset(img, off+1, end); else
+		//if((off&3) == 3) off = skip4_unset(img, off+1, end); else
 		off++;
 	}
 	cp->off = off;
@@ -161,7 +161,7 @@ nextcontour(Contour *cp, short *pt, int apt, int fillrule)
 	dir = 0;
 	for(i = 0; i < 8; i++){
 		cur = off + cp->moore[++dir];
-		if(img[cur] == 1){
+		if((img[cur] & Fset) == Fset){
 			off = cur;
 			dir = (dir+4) & 7;
 			break;
@@ -236,7 +236,7 @@ nextcontour(Contour *cp, short *pt, int apt, int fillrule)
 		}
 		off = cp->off;
 		while(off < end){
-			if((off&3) == 3) off = skip4_set(img, off+1, end); else
+			//if((off&3) == 3) off = skip4_set(img, off+1, end); else
 			if((img[++off] & Fset) == 0)
 				break;
 		}
