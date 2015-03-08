@@ -1,7 +1,7 @@
 
 .PHONY: libs
 
-CFLAGS=-O3
+CFLAGS=-O3 -W -Wall
 
 LIBS=\
 	-lX11\
