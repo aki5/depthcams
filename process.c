@@ -36,18 +36,8 @@ ptreverse(short *pt, int npt)
 	}
 }
 
-static inline void
-ptoffset(short *pt, int npt, int xoff, int yoff)
-{
-	int i;
-	for(i = 0; i < npt; i++){
-		pt[2*i+0] += xoff;
-		pt[2*i+1] += yoff;
-	}
-}
-
 int
-process_contour(uchar *cimg, int w, int h, int yoff)
+process_contour(Image *img, Rect clipr, uchar *cimg, int w, int h)
 {
 	int i;
 	short *pt;
@@ -55,7 +45,6 @@ process_contour(uchar *cimg, int w, int h, int yoff)
 	int cliph;
 
 	Contour contr;
-	int bugger = 0;
 
 	apt = 32768;
 	pt = malloc(2 * apt * sizeof pt[0]);
@@ -64,10 +53,10 @@ process_contour(uchar *cimg, int w, int h, int yoff)
 	uchar negcolor[4] = { 0xff, 0x30, 0x50, 0xff };
 	uchar color[4];
 
-	enum { MaxError = 2, MinArea = 10 };
+	enum { MaxError = 3 };
 
-	cliph = h < height-yoff ? h : height-yoff;
-	memset(framebuffer+yoff*stride, 0, stride*cliph);
+	cliph = h < height - clipr.y0 ? h : height - clipr.y0;
+	memset(framebuffer + clipr.y0*stride, 0, stride*cliph);
 
 	Tess postess, negtess;
 
@@ -100,12 +89,6 @@ process_contour(uchar *cimg, int w, int h, int yoff)
 		}
 
 		area = ptarea(pt, npt, orig);
-		/*
-		 *	we can not do early discard like this with multivalue contouring if
-		 *	we want edges to match
-		 *		if(area >= -MinArea && area <= MinArea)
-		 *			continue;
-		 */
 		if(area > 0){
 			if((npoly = fitpoly(poly, nelem(poly), pt, npt, MaxError)) == -1)
 				continue; /* not enough points */
@@ -140,34 +123,45 @@ process_contour(uchar *cimg, int w, int h, int yoff)
 	free(pt);
 	int ntris, tottris = 0;
 
-#if 1
 	if((ntris = tesstris(&postess, &pt)) != -1){
 		for(i = 0; i < ntris; i++){
-			idx2color(i, color);
-			//memcpy(color, poscolor, sizeof color);
-			drawtri(framebuffer+yoff*stride, width, cliph, pt+6*i+0, pt+6*i+2, pt+6*i+4, color, 0);
+			//idx2color(i, color);
+			memcpy(color, poscolor, sizeof color);
+			pt[6*i+0+0] += clipr.x0;
+			pt[6*i+0+1] += clipr.y0;
+			pt[6*i+2+0] += clipr.x0;
+			pt[6*i+2+1] += clipr.y0;
+			pt[6*i+4+0] += clipr.x0;
+			pt[6*i+4+1] += clipr.y0;
+			drawtri(img, clipr, pt+6*i+0, pt+6*i+2, pt+6*i+4, color);
 		}
 		free(pt);
 		tottris = ntris;
 	} else {
 		fprintf(stderr, "tesstris fail\n");
 	}
-#endif
+
 	if((ntris = tesstris(&negtess, &pt)) != -1){
 		for(i = 0; i < ntris; i++){
 			//idx2color(i, color);
 			memcpy(color, negcolor, sizeof color);
-			drawtri(framebuffer+yoff*stride, width, cliph, pt+6*i+0, pt+6*i+2, pt+6*i+4, color, 0);
+			pt[6*i+0+0] += clipr.x0;
+			pt[6*i+0+1] += clipr.y0;
+			pt[6*i+2+0] += clipr.x0;
+			pt[6*i+2+1] += clipr.y0;
+			pt[6*i+4+0] += clipr.x0;
+			pt[6*i+4+1] += clipr.y0;
+			drawtri(img, clipr, pt+6*i+0, pt+6*i+2, pt+6*i+4, color);
 		}
 		free(pt);
 		tottris += ntris;
 	} else {
 		fprintf(stderr, "tesstris fail\n");
 	}
+
 	freetess(&postess);
 	freetess(&negtess);
-	if(bugger)
-		return -1;
+
 	return 0;
 }
 
@@ -187,7 +181,7 @@ process_depth(uchar *dmap, int w, int h)
 		}
 	}
 
-	process_contour(img, w, h, 0);
+	process_contour(&screen, rect(0,0,w,h), img, w, h);
 	free(img);
 	return 0;
 
@@ -250,7 +244,7 @@ process_color(uchar *buf, int w, int h)
 		}
 	}
 
-	process_contour(img, w, h, 480);
+	process_contour(&screen, rect(0,480,w,480+h), img, w, h);
 	free(img);
 	return;
 
