@@ -63,7 +63,8 @@ process_contour(Image *img, Rect clipr, uchar *cimg, int w, int h)
 	inittess(&postess);
 	inittess(&negtess);
 
-	/* negative polygon needs to have something to subtract from */
+	/* negative polygon needs to have something to subtract from 
+
 	tessaddpoly(
 		&negtess,
 		(short[]){
@@ -75,9 +76,12 @@ process_contour(Image *img, Rect clipr, uchar *cimg, int w, int h)
 		(int[]){0, 1, 2, 3},
 		4
 	);
+*/
+
 	initcontour(&contr, cimg, w, h);
 	resetcontour(&contr);
-	while((npt = nextcontour(&contr, pt, apt, 1)) != -1){
+	int fid;
+	while((npt = nextcontour(&contr, pt, apt, 1, &fid)) != -1){
 		short orig[2] = { -1, -1 };
 		int area;
 		int poly[4096];
@@ -92,17 +96,17 @@ process_contour(Image *img, Rect clipr, uchar *cimg, int w, int h)
 		if(area > 0){
 			if((npoly = fitpoly(poly, nelem(poly), pt, npt, MaxError)) == -1)
 				continue; /* not enough points */
-			if(npoly == nelem(poly)){
-				fprintf(stderr, "out of poly space!\n");
+			if(npoly == nelem(poly) || npoly < 3)
 				continue;
-			}
 			if(polyarea(pt, poly, npoly, orig) < 0){
 				fprintf(stderr, "bugger! orientation of poly different from pt!\n");
 				continue;
 			}
-			tessaddpoly(&postess, pt, poly, npoly);
-			polyreverse(poly, npoly);
-			tessaddpoly(&negtess, pt, poly, npoly);
+			if(fid == 1){
+				tessaddpoly(&postess, pt, poly, npoly);
+			} else {
+				tessaddpoly(&negtess, pt, poly, npoly);
+			}
 		} else {
 			ptreverse(pt, npt);
 			npoly = fitpoly(poly, nelem(poly), pt, npt, MaxError);
@@ -112,9 +116,12 @@ process_contour(Image *img, Rect clipr, uchar *cimg, int w, int h)
 				fprintf(stderr, "bugger! orientation of poly different from pt!\n");
 				continue;
 			}
-			tessaddpoly(&negtess, pt, poly, npoly);
 			polyreverse(poly, npoly);
-			tessaddpoly(&postess, pt, poly, npoly);
+			if(fid == 1){
+				tessaddpoly(&postess, pt, poly, npoly);
+			} else {
+				tessaddpoly(&negtess, pt, poly, npoly);
+			}
 		}
 
 	}
@@ -177,7 +184,7 @@ process_depth(uchar *dmap, int w, int h)
 			int pix, off;
 			off = i*w+j;
 			pix = getu16(dmap + 2*off);
-			img[off] = (pix > 0) ? Fset : 0;
+			img[off] = (pix > 0) ? 1 : 0;
 		}
 	}
 
@@ -240,7 +247,7 @@ process_color(uchar *buf, int w, int h)
 			int pix, off;
 			off = i*w+j;
 			pix =buf[2*off];
-			img[off] = (pix > 128) ? Fset : 0;
+			img[off] = (pix > 128) ? 1 : 0;
 		}
 	}
 

@@ -1,6 +1,7 @@
 
 enum {
-	Fset = 0x40,
+	Fid = 0x7f,
+//	Fset = 0x0f,
 	Fcont = 0x80,
 };
 
@@ -17,7 +18,7 @@ struct Contour {
 };
 
 void initcontour(Contour *cp, uchar *img, int width, int height);
-int nextcontour(Contour *cp, short *pt, int apt, int fillrule);
+int nextcontour(Contour *cp, short *pt, int apt, int fillrule, int *idp);
 void resetcontour(Contour *cp);
 void erodecontour(Contour *cp);
 void setcontour(Contour *cp, short *pt, int npt, int bit);

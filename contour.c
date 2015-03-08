@@ -33,11 +33,11 @@ initcontour(Contour *cp, uchar *img, int width, int height)
 	cp->moore[14] = cp->moore[6];
 	cp->moore[15] = cp->moore[7];
 
-	memset(img, 0, width);
-	memset(img + (height-1)*width, 0,  width);
+	memset(img, Fcont|Fid, width);
+	memset(img + (height-1)*width, Fcont|Fid,  width);
 	for(i = 1; i < height-1; i++){
-		img[i*width] = 0;
-		img[i*width+width-1] = 0;
+		img[i*width] = Fcont|Fid;
+		img[i*width+width-1] = Fcont|Fid;
 	}
 }
 
@@ -45,70 +45,6 @@ void
 resetcontour(Contour *cp)
 {
 	cp->off = 0;
-}
-
-static inline int
-skip8_unset(uchar *img, int off, int end)
-{
-	unsigned long long octa;
-	while(off < end-7){
-		octa = *(unsigned long long *)(img+off);
-		octa |= octa >> 32;
-		octa |= octa >> 16;
-		octa |= octa >> 8;
-		if((octa & Fset) == Fset)
-			break;
-		off += 8;
-	}
-	return off;
-}
-
-static inline int
-skip8_set(uchar *img, int off, int end)
-{
-	unsigned long long octa;
-	while(off < end-7){
-		octa = *(unsigned long long *)(img+off);
-		octa &= octa >> 32;
-		octa &= octa >> 16;
-		octa &= octa >> 8;
-		if((octa & Fset) == 0)
-			break;
-		off += 8;
-	}
-	return off;
-}
-
-static inline int
-skip4_unset(uchar *img, int off, int end)
-{
-	unsigned int quad;
-	while(off < end-3){
-		//if((off&7) == 0) return skip8_unset(img, off, end);
-		quad = *(unsigned int *)(img+off);
-		quad |= quad >> 16;
-		quad |= quad >> 8;
-		if((quad & Fset) == Fset)
-			break;
-		off += 4;
-	}
-	return off;
-}
-
-static inline int
-skip4_set(uchar *img, int off, int end)
-{
-	unsigned int quad;
-	while(off < end-3){
-		//if((off&7) == 0) return skip8_set(img, off, end);
-		quad = *(unsigned int *)(img+off);
-		quad &= quad >> 16;
-		quad &= quad >> 8;
-		if((quad & Fset) == 0)
-			break;
-		off += 4;
-	}
-	return off;
 }
 
 int
@@ -125,33 +61,32 @@ ptappend(short *pt, int apt, int *nptp, int x, int y)
 	return -1;
 }
 
-/* regular moore contouring */
 int
-nextcontour(Contour *cp, short *pt, int apt, int fillrule)
+nextcontour(Contour *cp, short *pt, int apt, int fillrule, int *idp)
 {
 	uchar *img;
 	int cur, off, end;
 	int i, dir;
 	int npt;
 	int width;
+	int fid;
 
 	width = cp->width;
 	img = cp->img;
 	off = cp->off;
 	end = cp->end;
 
+	fid = -1;
 	while(off < end){
-		int flags = img[off] & (Fset|Fcont);
- 		if(flags == Fset)
+		int flags = img[off];
+		fid = flags&Fid;
+		if((flags&Fcont) == 0)
 			break;
-		if(flags == (Fset|Fcont))
-			while(off < end){
-				//if((off&3) == 3) off = skip4_set(img, off+1, end); else
-				if((img[++off] & Fset) == 0)
-					break;
-			}
-		//if((off&3) == 3) off = skip4_unset(img, off+1, end); else
-		off++;
+		do {
+			if((img[++off] & Fid) != fid)
+				break;
+		} while(off < end);
+		//off++;
 	}
 	cp->off = off;
 	if(off == end)
@@ -161,7 +96,7 @@ nextcontour(Contour *cp, short *pt, int apt, int fillrule)
 	dir = 0;
 	for(i = 0; i < 8; i++){
 		cur = off + cp->moore[++dir];
-		if((img[cur] & Fset) == Fset){
+		if((img[cur] & Fid) == fid){
 			off = cur;
 			dir = (dir+4) & 7;
 			break;
@@ -194,7 +129,7 @@ nextcontour(Contour *cp, short *pt, int apt, int fillrule)
 			int odir = dir;
 			for(i = 0; i < 8; i++){
 				cur = off + cp->moore[++dir];
-				if((img[cur] & Fset) == Fset){
+				if((img[cur] & Fid) == fid){
 					img[cur] |= Fcont;
 					off = cur;
 					odir = dir&7;
@@ -236,13 +171,13 @@ nextcontour(Contour *cp, short *pt, int apt, int fillrule)
 		}
 		off = cp->off;
 		while(off < end){
-			//if((off&3) == 3) off = skip4_set(img, off+1, end); else
-			if((img[++off] & Fset) == 0)
+			if((img[++off] & Fid) != fid)
 				break;
 		}
 		cp->off++;
 	} 
 
+	*idp = fid;
 	return npt;
 }
 
