@@ -86,7 +86,6 @@ findcenter(short *points, int npoints, short *c)
 static inline int
 findmaxdst2(short *pt, int npt, int a, int b, int *maxip, int *maxdst2p)
 {
-	short *pa, *pb, *pi;
 	int dst2, maxdst2;
 	int i, maxi;
 
@@ -130,11 +129,13 @@ fitpoly(int *poly, int apoly, short *pt, int npt, int dstthr)
 {
 	int i, j, npoly, pi, ni;
 	int dst2, maxdst2, maxi;
-	int a, b;
 	short cntr[2], *cpt = cntr;
 
 	int polymaxi[apoly];
 	int polymaxdst2[apoly];
+
+	if(npt < 2)
+		return -1;
 
 	findcenter(pt, npt, cpt);
 	npoly = 0;
@@ -161,6 +162,7 @@ fitpoly(int *poly, int apoly, short *pt, int npt, int dstthr)
 	while(npoly < apoly){
 
 #if 0
+		int a, b;
 		maxi = -1;
 		maxdst2 = -1;
 		pi = npoly-1;
