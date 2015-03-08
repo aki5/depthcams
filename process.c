@@ -15,7 +15,6 @@ polyreverse(int *poly, int npoly)
 {
 	int i, tmp;
 	for(i = 0; i < npoly/2; i++){
-		int tmp;
 		tmp = poly[npoly-1-i];
 		poly[npoly-1-i] = poly[i];
 		poly[i] = tmp;
@@ -37,35 +36,26 @@ ptreverse(short *pt, int npt)
 	}
 }
 
-static int
-revb(int a)
+static inline void
+ptoffset(short *pt, int npt, int xoff, int yoff)
 {
-	return ((a&1)<<7) |((a&2)<<5) |((a&4)<<3) |((a&8)<<1);
+	int i;
+	for(i = 0; i < npt; i++){
+		pt[2*i+0] += xoff;
+		pt[2*i+1] += yoff;
+	}
 }
 
 int
-process_depth(uchar *dmap, int w, int h)
+process_contour(uchar *cimg, int w, int h, int yoff)
 {
-	int i, j;
+	int i;
 	short *pt;
 	int npt, apt;
 	int cliph;
 
 	Contour contr;
-	uchar *cimg, *dimg;
 	int bugger = 0;
-
-	cimg = malloc(w*h);
-	dimg = malloc(w*h);
-	for(i = 0; i < h; i++){
-		for(j = 0; j < w; j++){
-			int pix, off;
-			off = i*w+j;
-			pix = getu16(dmap + 2*off);
-			cimg[off] = (pix > 0) ? Fset : 0;
-			dimg[off] = (pix > 0) ? 0 : Fset;
-		}
-	}
 
 	apt = 32768;
 	pt = malloc(2 * apt * sizeof pt[0]);
@@ -74,12 +64,13 @@ process_depth(uchar *dmap, int w, int h)
 	uchar negcolor[4] = { 0xff, 0x30, 0x50, 0xff };
 	uchar color[4];
 
-	enum { MaxError = 3 };
+	enum { MaxError = 2, MinArea = 10 };
 
-	cliph = h < height ? h : height;
-	memset(framebuffer, 0, stride*cliph);
+	cliph = h < height-yoff ? h : height-yoff;
+	memset(framebuffer+yoff*stride, 0, stride*cliph);
 
 	Tess postess, negtess;
+
 	inittess(&postess);
 	inittess(&negtess);
 
@@ -95,100 +86,111 @@ process_depth(uchar *dmap, int w, int h)
 		(int[]){0, 1, 2, 3},
 		4
 	);
-
 	initcontour(&contr, cimg, w, h);
-	for(j = 0; j < 1; j++){
-		resetcontour(&contr);
-		int k = 0;
-		while((npt = nextcontour(&contr, pt, apt)) != -1){
-			short *a, *b;
-			short orig[2] = { -1, -1 };
-			int poly[512];
-			int npoly;
+	resetcontour(&contr);
+	while((npt = nextcontour(&contr, pt, apt, 1)) != -1){
+		short orig[2] = { -1, -1 };
+		int area;
+		int poly[4096];
+		int npoly;
 
-			if(npt == apt){
-				fprintf(stderr, "out of points!\n");
-				continue;
-			}
-
-			if(ptarea(pt, npt, orig) > 0){
-				npoly = fitpoly(poly, nelem(poly), pt, npt, MaxError);
-				if(npoly == nelem(poly)){
-					fprintf(stderr, "out of poly space!\n");
-					continue;
-				}
-				if(polyarea(pt, poly, npoly, orig) < 0){
-					fprintf(stderr, "bugger! orientation of poly different from pt!\n");
-					continue;
-				}
-				tessaddpoly(&postess, pt, poly, npoly);
-				polyreverse(poly, npoly);
-				tessaddpoly(&negtess, pt, poly, npoly);
-
-				setcontour(&contr, pt, npt, Ffix);
-				if(0)if(drawpoly(framebuffer, width, cliph, pt, poly, npoly, poscolor, 0) == -1){
-					for(i = 0; i < npt; i++){
-						int off = pt[2*i+1]*stride + 4*pt[2*i+0];
-						framebuffer[off+0] = 0xff;
-						framebuffer[off+1] = 0xff;
-						framebuffer[off+2] = 0xff;
-						framebuffer[off+3] = 0xff;
-					}
-				}
-			} else {
-				ptreverse(pt, npt);
-				npoly = fitpoly(poly, nelem(poly), pt, npt, MaxError);
-				if(npoly == nelem(poly) || npoly < 3)
-					continue;
-				if(polyarea(pt, poly, npoly, orig) < 0){
-					fprintf(stderr, "bugger! orientation of poly different from pt!\n");
-					continue;
-				}
-				tessaddpoly(&negtess, pt, poly, npoly);
-				polyreverse(poly, npoly);
-				tessaddpoly(&postess, pt, poly, npoly);
-				continue;
-			}
-
+		if(npt == apt){
+			fprintf(stderr, "out of points!\n");
+			continue;
 		}
-		if(k == 0)
-			break;
-		erodecontour(&contr);
+
+		area = ptarea(pt, npt, orig);
+		/*
+		 *	we can not do early discard like this with multivalue contouring if
+		 *	we want edges to match
+		 *		if(area >= -MinArea && area <= MinArea)
+		 *			continue;
+		 */
+		if(area > 0){
+			if((npoly = fitpoly(poly, nelem(poly), pt, npt, MaxError)) == -1)
+				continue; /* not enough points */
+			if(npoly == nelem(poly)){
+				fprintf(stderr, "out of poly space!\n");
+				continue;
+			}
+			if(polyarea(pt, poly, npoly, orig) < 0){
+				fprintf(stderr, "bugger! orientation of poly different from pt!\n");
+				continue;
+			}
+			tessaddpoly(&postess, pt, poly, npoly);
+			polyreverse(poly, npoly);
+			tessaddpoly(&negtess, pt, poly, npoly);
+		} else {
+			ptreverse(pt, npt);
+			npoly = fitpoly(poly, nelem(poly), pt, npt, MaxError);
+			if(npoly == nelem(poly) || npoly < 3)
+				continue;
+			if(polyarea(pt, poly, npoly, orig) < 0){
+				fprintf(stderr, "bugger! orientation of poly different from pt!\n");
+				continue;
+			}
+			tessaddpoly(&negtess, pt, poly, npoly);
+			polyreverse(poly, npoly);
+			tessaddpoly(&postess, pt, poly, npoly);
+		}
+
 	}
 
-	free(pt);
-	free(dimg);
-	free(cimg);
 
-	int ntris;
+	free(pt);
+	int ntris, tottris = 0;
+
+#if 1
 	if((ntris = tesstris(&postess, &pt)) != -1){
 		for(i = 0; i < ntris; i++){
 			idx2color(i, color);
-
-			memcpy(color, poscolor, sizeof color);
-			drawtri(framebuffer, width, cliph, pt+6*i+0, pt+6*i+2, pt+6*i+4, color, 0);
+			//memcpy(color, poscolor, sizeof color);
+			drawtri(framebuffer+yoff*stride, width, cliph, pt+6*i+0, pt+6*i+2, pt+6*i+4, color, 0);
 		}
 		free(pt);
+		tottris = ntris;
 	} else {
 		fprintf(stderr, "tesstris fail\n");
 	}
+#endif
 	if((ntris = tesstris(&negtess, &pt)) != -1){
 		for(i = 0; i < ntris; i++){
-			idx2color(i, color);
-
+			//idx2color(i, color);
 			memcpy(color, negcolor, sizeof color);
-			drawtri(framebuffer, width, cliph, pt+6*i+0, pt+6*i+2, pt+6*i+4, color, 0);
+			drawtri(framebuffer+yoff*stride, width, cliph, pt+6*i+0, pt+6*i+2, pt+6*i+4, color, 0);
 		}
 		free(pt);
+		tottris += ntris;
 	} else {
 		fprintf(stderr, "tesstris fail\n");
 	}
 	freetess(&postess);
 	freetess(&negtess);
-
 	if(bugger)
 		return -1;
 	return 0;
+}
+
+int
+process_depth(uchar *dmap, int w, int h)
+{
+	int i, j;
+	uchar *img;
+
+	img = malloc(w*h);
+	for(i = 0; i < h; i++){
+		for(j = 0; j < w; j++){
+			int pix, off;
+			off = i*w+j;
+			pix = getu16(dmap + 2*off);
+			img[off] = (pix > 0) ? Fset : 0;
+		}
+	}
+
+	process_contour(img, w, h, 0);
+	free(img);
+	return 0;
+
 #if 0
 	int i, j, k, l;
 	int shmoff, off;
@@ -234,9 +236,27 @@ clampf(float a, float min, float max)
 void
 process_color(uchar *buf, int w, int h)
 {
-	uchar *dp;
 
-	int i, j, off;
+	int i, j;
+	uchar *img;
+
+	img = malloc(w*h);
+	for(i = 0; i < h; i++){
+		for(j = 0; j < w; j++){
+			int pix, off;
+			off = i*w+j;
+			pix =buf[2*off];
+			img[off] = (pix > 128) ? Fset : 0;
+		}
+	}
+
+	process_contour(img, w, h, 480);
+	free(img);
+	return;
+
+#if 0
+	uchar *dp;
+	int off;
 	for(j = 0; j < h && (j+480) < height; j++){
 		dp = framebuffer + (j+480)*stride;
 		for(i = 0; i < w && i < width; i += 2){
@@ -262,4 +282,5 @@ process_color(uchar *buf, int w, int h)
 			dp += 8;
 		}
 	}
+#endif
 }

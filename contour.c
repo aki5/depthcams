@@ -112,7 +112,22 @@ skip4_set(uchar *img, int off, int end)
 }
 
 int
-nextcontour(Contour *cp, short *pt, int apt)
+ptappend(short *pt, int apt, int *nptp, int x, int y)
+{
+	int npt = *nptp;
+	if(npt < apt){
+		pt[2*npt+0] = x;
+		pt[2*npt+1] = y;
+		npt++;
+		*nptp = npt;
+		return 0;
+	}
+	return -1;
+}
+
+/* regular moore contouring */
+int
+nextcontour(Contour *cp, short *pt, int apt, int fillrule)
 {
 	uchar *img;
 	int cur, off, end;
@@ -142,7 +157,7 @@ nextcontour(Contour *cp, short *pt, int apt)
 	if(off == end)
 		return -1;
 
-	// do one step to get a solid stopping criterion
+	// do one step to set up stopping and dir.
 	dir = 0;
 	for(i = 0; i < 8; i++){
 		cur = off + cp->moore[++dir];
@@ -160,33 +175,61 @@ nextcontour(Contour *cp, short *pt, int apt)
 			int xcoord, ycoord;
 			ycoord = off / width;
 			xcoord = off % width;
-			pt[2*npt+0] = xcoord;
-			pt[2*npt+1] = ycoord;
-			npt++;
-		}		cp->off++;
+			if(fillrule){
+				ptappend(pt, apt, &npt, xcoord, ycoord);
+				ptappend(pt, apt, &npt, xcoord, ycoord+1);
+				ptappend(pt, apt, &npt, xcoord+1, ycoord);
+			} else {
+				ptappend(pt, apt, &npt, xcoord, ycoord);
+			}
+		}
+		cp->off++;
 	} else {
 		// found something to trace
 		int stop, stopdir;
 		stop = off;
 		stopdir = dir;
 		for(;;){
-
+			int idir = dir;
+			int odir = dir;
 			for(i = 0; i < 8; i++){
 				cur = off + cp->moore[++dir];
 				if((img[cur] & Fset) == Fset){
 					img[cur] |= Fcont;
 					off = cur;
-					dir = (dir+4) & 7;
+					odir = dir&7;
+					dir = (dir+4)&7;
 					break;
 				}
 			}
+/* this should be moved to the above loop as an "else" branch */
 			if(npt < apt){
 				int xcoord, ycoord;
 				ycoord = off / width;
 				xcoord = off % width;
-				pt[2*npt+0] = xcoord;
-				pt[2*npt+1] = ycoord;
-				npt++;
+				if(fillrule){
+					int topleft = 0;
+					for(idir += 1; (idir&7) != odir; idir++){
+						if(!topleft && idir == 0){
+							ptappend(pt, apt, &npt, xcoord, ycoord);
+							topleft = 1;
+						}
+						if(idir == 2){
+							ptappend(pt, apt, &npt, xcoord, ycoord+1);
+							topleft = 0;
+						}
+						if(idir == 4){
+							ptappend(pt, apt, &npt, xcoord+1, ycoord);
+							topleft = 0;
+						}
+						if(!topleft && idir == 6){
+							ptappend(pt, apt, &npt, xcoord, ycoord);
+							topleft = 1;
+						}
+					}
+				} else {
+					ptappend(pt, apt, &npt, xcoord, ycoord);
+				}
 			}
 			if(off == stop && dir == stopdir)
 				break;
@@ -197,47 +240,10 @@ nextcontour(Contour *cp, short *pt, int apt)
 			if((img[++off] & Fset) == 0)
 				break;
 		}
-		cp->off = off + 1;
+		cp->off++;
 	} 
 
 	return npt;
-}
-
-void
-erodecontour(Contour *cp)
-{
-	int i, len;
-	u32int *img;
-	const u32int
-		fixmask = 0x01010101 * Ffix,
-		contmask = 0x01010101 * Fcont;
-
-	/* gcc seems to vectorize this for sse, impressive! */
-	img = (u32int *)cp->img;
-	len = cp->width*cp->height / sizeof img[0];
-	for(i = 0; i < len; i++){
-		u32int val = img[i];
-		u32int fix = (val & fixmask) / Ffix;
-		u32int ncont = ((val & contmask) / Fcont) ^ 0x01010101;
-
-		fix |= fix<<1;
-		fix |= fix<<2;
-		fix |= fix<<4;
-
-		ncont |= ncont<<1;
-		ncont |= ncont<<2;
-		ncont |= ncont<<4;
-
-		img[i] = val & (fix | ncont);
-	}
-#if 0
-	uchar *img;
-	img = cp->img;
-	len = cp->width*cp->height;
-	for(i = 0; i < len; i++)
-		if((img[i] & (Ffix|Fcont|Fset)) == (Fcont|Fset))
-			img[i] = 0;
-#endif
 }
 
 void
