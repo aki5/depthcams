@@ -37,7 +37,7 @@ ptreverse(short *pt, int npt)
 }
 
 int
-process_contour(Image *img, Rect clipr, uchar *cimg, int w, int h)
+process_contour(Image *img, Rect clipr, uchar *cimg, int w, int h, uchar *colors)
 {
 	int i;
 	short *pt;
@@ -49,37 +49,18 @@ process_contour(Image *img, Rect clipr, uchar *cimg, int w, int h)
 	apt = 32768;
 	pt = malloc(2 * apt * sizeof pt[0]);
 
-	uchar poscolor[4] = { 0x50, 0xff, 0x30, 0xff };
-	uchar negcolor[4] = { 0xff, 0x30, 0x50, 0xff };
 	uchar color[4];
 
-	enum { MaxError = 3 };
+	enum { MaxError = 5 };
 
 	cliph = h < height - clipr.y0 ? h : height - clipr.y0;
 	memset(framebuffer + clipr.y0*stride, 0, stride*cliph);
 
-	Tess postess, negtess;
-
-	inittess(&postess);
-	inittess(&negtess);
-
-	/* negative polygon needs to have something to subtract from 
-
-	tessaddpoly(
-		&negtess,
-		(short[]){
-			0,0,
-			0,cliph-1,
-			width-1,cliph-1,
-			width-1,0
-		},
-		(int[]){0, 1, 2, 3},
-		4
-	);
-*/
+	Tess tess[16];
+	for(i = 0; i < nelem(tess); i++)
+		inittess(tess+i);
 
 	initcontour(&contr, cimg, w, h);
-	resetcontour(&contr);
 	int fid;
 	while((npt = nextcontour(&contr, pt, apt, 1, &fid)) != -1){
 		short orig[2] = { -1, -1 };
@@ -99,75 +80,44 @@ process_contour(Image *img, Rect clipr, uchar *cimg, int w, int h)
 			if(npoly == nelem(poly) || npoly < 3)
 				continue;
 			if(polyarea(pt, poly, npoly, orig) < 0){
-				fprintf(stderr, "bugger! orientation of poly different from pt!\n");
 				continue;
 			}
-			if(fid == 1){
-				tessaddpoly(&postess, pt, poly, npoly);
-			} else {
-				tessaddpoly(&negtess, pt, poly, npoly);
-			}
+			tessaddpoly(tess+fid, pt, poly, npoly);
 		} else {
 			ptreverse(pt, npt);
 			npoly = fitpoly(poly, nelem(poly), pt, npt, MaxError);
 			if(npoly == nelem(poly) || npoly < 3)
 				continue;
 			if(polyarea(pt, poly, npoly, orig) < 0){
-				fprintf(stderr, "bugger! orientation of poly different from pt!\n");
 				continue;
 			}
 			polyreverse(poly, npoly);
-			if(fid == 1){
-				tessaddpoly(&postess, pt, poly, npoly);
-			} else {
-				tessaddpoly(&negtess, pt, poly, npoly);
-			}
+			tessaddpoly(tess+fid, pt, poly, npoly);
 		}
-
 	}
 
 
 	free(pt);
-	int ntris, tottris = 0;
-
-	if((ntris = tesstris(&postess, &pt)) != -1){
-		for(i = 0; i < ntris; i++){
-			//idx2color(i, color);
-			memcpy(color, poscolor, sizeof color);
-			pt[6*i+0+0] += clipr.x0;
-			pt[6*i+0+1] += clipr.y0;
-			pt[6*i+2+0] += clipr.x0;
-			pt[6*i+2+1] += clipr.y0;
-			pt[6*i+4+0] += clipr.x0;
-			pt[6*i+4+1] += clipr.y0;
-			drawtri(img, clipr, pt+6*i+0, pt+6*i+2, pt+6*i+4, color);
+	int ntris;
+	int j;
+	for(j = 0; j < nelem(tess); j++){
+		if((ntris = tesstris(tess+j, &pt)) != -1){
+			memcpy(color, colors+4*j, sizeof color);
+			for(i = 0; i < ntris; i++){
+				//idx2color(j, color);
+				//memcpy(color, poscolor, sizeof color);
+				pt[6*i+0+0] += clipr.x0;
+				pt[6*i+0+1] += clipr.y0;
+				pt[6*i+2+0] += clipr.x0;
+				pt[6*i+2+1] += clipr.y0;
+				pt[6*i+4+0] += clipr.x0;
+				pt[6*i+4+1] += clipr.y0;
+				drawtri(img, clipr, pt+6*i+0, pt+6*i+2, pt+6*i+4, color);
+			}
+			free(pt);
 		}
-		free(pt);
-		tottris = ntris;
-	} else {
-		fprintf(stderr, "tesstris fail\n");
+		freetess(tess+j);
 	}
-
-	if((ntris = tesstris(&negtess, &pt)) != -1){
-		for(i = 0; i < ntris; i++){
-			//idx2color(i, color);
-			memcpy(color, negcolor, sizeof color);
-			pt[6*i+0+0] += clipr.x0;
-			pt[6*i+0+1] += clipr.y0;
-			pt[6*i+2+0] += clipr.x0;
-			pt[6*i+2+1] += clipr.y0;
-			pt[6*i+4+0] += clipr.x0;
-			pt[6*i+4+1] += clipr.y0;
-			drawtri(img, clipr, pt+6*i+0, pt+6*i+2, pt+6*i+4, color);
-		}
-		free(pt);
-		tottris += ntris;
-	} else {
-		fprintf(stderr, "tesstris fail\n");
-	}
-
-	freetess(&postess);
-	freetess(&negtess);
 
 	return 0;
 }
@@ -176,6 +126,10 @@ int
 process_depth(uchar *dmap, int w, int h)
 {
 	int i, j;
+	uchar colors[] = {
+		0x00, 0x00, 0x00, 0xff,
+		0xff, 0xff, 0xff, 0xff
+	};
 	uchar *img;
 
 	img = malloc(w*h);
@@ -188,7 +142,7 @@ process_depth(uchar *dmap, int w, int h)
 		}
 	}
 
-	process_contour(&screen, rect(0,0,w,h), img, w, h);
+	process_contour(&screen, rect(0,0,w,h), img, w, h, colors);
 	free(img);
 	return 0;
 
@@ -237,21 +191,30 @@ clampf(float a, float min, float max)
 void
 process_color(uchar *buf, int w, int h)
 {
-
+	enum { Ncolors = 16 };
 	int i, j;
 	uchar *img;
+	uchar colors[Ncolors*4];
+
+	for(i = 0; i < Ncolors; i++){
+		colors[4*i+0] = 0xff*i/(Ncolors-1);
+		colors[4*i+1] = 0xff*i/(Ncolors-1);
+		colors[4*i+2] = 0xff*i/(Ncolors-1);
+		colors[4*i+3] = 0xff;
+	}
 
 	img = malloc(w*h);
 	for(i = 0; i < h; i++){
 		for(j = 0; j < w; j++){
 			int pix, off;
 			off = i*w+j;
-			pix =buf[2*off];
-			img[off] = (pix > 128) ? 1 : 0;
+			//pix = average(buf, j, i, 2*w);
+			pix = buf[2*off];
+			img[off] = ((Ncolors-1)*pix)/255;
 		}
 	}
 
-	process_contour(&screen, rect(0,480,w,480+h), img, w, h);
+	process_contour(&screen, rect(0,480,w,480+h), img, w, h, colors);
 	free(img);
 	return;
 
