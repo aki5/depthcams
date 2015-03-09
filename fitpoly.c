@@ -16,7 +16,6 @@ static inline void
 ptsegdst2(short *p, short *a, short *b, int *dstp2, int *dstq2)
 {
 	short ap[2], ab[2];
-	short ortpr[2];
 	int tp, tq, det;
 
 	tq = ptptdst2(a, b);
@@ -47,6 +46,7 @@ ptsegdst2(short *p, short *a, short *b, int *dstp2, int *dstq2)
 	*dstq2 = tq;
 	return;
 /*
+	short ortpr[2];
 	ortpr[0] = a[0] + muldiv(ab[0], tp, tq);
 	ortpr[1] = a[1] + muldiv(ab[1], tp, tq);
 */
@@ -80,13 +80,12 @@ findcenter(short *points, int npoints, short *c)
 static inline int
 findmaxdst2(short *pt, int npt, int a, int b, int *maxip, int *maxdst2p)
 {
-	int dst2, dstp2, dstq2;
-	int maxdst2, maxdstp2, maxdstq2;
+	int dstp2, dstq2;
+	int maxdstp2, maxdstq2;
 	int i, maxi;
 
 	maxdstp2 = -1;
 	maxdstq2 = 1;
-	maxdst2 = -1;
 	maxi = -1;
 
 	for(i = a+1; i < npt; i++){
