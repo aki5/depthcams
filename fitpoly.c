@@ -12,50 +12,44 @@ ptptdst2(short *a, short *b)
 	return abx*abx + aby*aby;
 }
 
-static inline int
-muldiv(int a, int p, int q)
-{
-	unsigned int ua, up, uq, ur;
-	int as, ps, qs, rs;
-	as = a>>31; // take sign
-	ps = p>>31;
-	qs = q>>31;
-	ua = (a ^ as) - as; // absolute value
-	up = (p ^ ps) - ps;
-	uq = (q ^ qs) - qs;
-	rs = as^ps^qs;
-	ur = (up*ua + uq/2) / uq;
-	return rs < 0 ? -ur : ur;
-}
-
-static inline int
-ptsegdst2(short *p, short *a, short *b)
+static inline void
+ptsegdst2(short *p, short *a, short *b, int *dstp2, int *dstq2)
 {
 	short ap[2], ab[2];
 	short ortpr[2];
-	int tp;
-	int tq;
+	int tp, tq, det;
 
 	tq = ptptdst2(a, b);
-	if(tq == 0)
-		return ptptdst2(a, p);
-
+	if(tq == 0){
+		*dstp2 = ptptdst2(a, p);
+		*dstq2 = 1;
+		return;
+	}
 	ap[0] = p[0] - a[0];
 	ap[1] = p[1] - a[1];
-
 	ab[0] = b[0] - a[0];
 	ab[1] = b[1] - a[1];
+	tp = dot2i(ab, ap);
 
-	tp = ap[0]*ab[0] + ap[1]*ab[1];
-	if(tp < 0)
-		return ptptdst2(a, p);
-	if(tp > tq)
-		return ptptdst2(b, p);
+	if(tp < 0){
+		*dstp2 = ptptdst2(a, p);
+		*dstq2 = 1;
+		return;
+	}
+	if(tp > tq){
+		*dstp2 = ptptdst2(b, p);
+		*dstq2 = 1;
+		return;
+	}
 
+	det = det2i(ap[0], ap[1], ab[0], ab[1]);
+	*dstp2 = det*det;
+	*dstq2 = tq;
+	return;
+/*
 	ortpr[0] = a[0] + muldiv(ab[0], tp, tq);
 	ortpr[1] = a[1] + muldiv(ab[1], tp, tq);
-
-	return ptptdst2(ortpr, p);
+*/
 }
 
 static inline int
@@ -86,30 +80,36 @@ findcenter(short *points, int npoints, short *c)
 static inline int
 findmaxdst2(short *pt, int npt, int a, int b, int *maxip, int *maxdst2p)
 {
-	int dst2, maxdst2;
+	int dst2, dstp2, dstq2;
+	int maxdst2, maxdstp2, maxdstq2;
 	int i, maxi;
 
+	maxdstp2 = -1;
+	maxdstq2 = 1;
 	maxdst2 = -1;
 	maxi = -1;
+
 	for(i = a+1; i < npt; i++){
 		if(i == b)
 			break;
-		dst2 = ptsegdst2(pt + 2*i, pt + 2*a, pt + 2*b);
-		if(dst2 > maxdst2){
-			maxdst2 = dst2;
+		ptsegdst2(pt + 2*i, pt + 2*a, pt + 2*b, &dstp2, &dstq2);
+		if((long long)dstp2*maxdstq2 > (long long)maxdstp2*dstq2){
+			maxdstp2 = dstp2;
+			maxdstq2 = dstq2;
 			maxi = i;
 		}
 	}
 	if(i == npt){
 		for(i = 0; i != b; i++){
-			dst2 = ptsegdst2(pt + 2*i, pt + 2*a, pt + 2*b);
-			if(dst2 > maxdst2){
-				maxdst2 = dst2;
+			ptsegdst2(pt + 2*i, pt + 2*a, pt + 2*b, &dstp2, &dstq2);
+			if((long long)dstp2*maxdstq2 > (long long)maxdstp2*dstq2){
+				maxdstp2 = dstp2;
+				maxdstq2 = dstq2;
 				maxi = i;
 			}
 		}
 	}
-	*maxdst2p = maxdst2;
+	*maxdst2p = maxdstp2 / maxdstq2;
 	*maxip = maxi;
 	return maxi == -1 ? -1 : 0;
 }
@@ -161,28 +161,6 @@ fitpoly(int *poly, int apoly, short *pt, int npt, int dstthr)
 
 	while(npoly < apoly){
 
-#if 0
-		int a, b;
-		maxi = -1;
-		maxdst2 = -1;
-		pi = npoly-1;
-		a = poly[pi];
-		pi = 0;
-		b = poly[pi];
-		for(i = 0; i < npt; i++){
-			if(i == b){
-				// step the seg we are measuring against
-				pi = pi == npoly-1 ? 0 : pi + 1;
-				a = b;
-				b = poly[pi];
-			}
-			dst2 = ptsegdst2(pt + 2*i, pt + 2*a, pt + 2*b);
-			if(dst2 > maxdst2){// && polysegisect(pt, poly, npoly, a, i) == 0 && polysegisect(pt, poly, npoly, i, b) == 0){
-				maxdst2 = dst2;
-				maxi = i;
-			}
-		}
-#else
 		int maxi2 = -1;
 		int maxd2 = -1;
 		for(i = 0; i < npoly; i++){
@@ -193,7 +171,7 @@ fitpoly(int *poly, int apoly, short *pt, int npt, int dstthr)
 		}
 		maxi = maxi2;
 		maxdst2 = maxd2;
-#endif
+
 		if(maxdst2 == -1)
 			return -1;
 		if(maxdst2 < dstthr*dstthr)
