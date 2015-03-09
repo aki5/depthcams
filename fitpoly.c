@@ -12,7 +12,7 @@ ptptdst2(short *a, short *b)
 	return abx*abx + aby*aby;
 }
 
-static inline void
+static void
 ptsegdst2(short *p, short *a, short *b, int *dstp2, int *dstq2)
 {
 	short ap[2], ab[2];
@@ -62,22 +62,7 @@ sortput(int *tab, int len, int val)
 	return j+1;
 }
 
-static inline void
-findcenter(short *points, int npoints, short *c)
-{
-	int i, c0, c1;
-
-	c0 = points[0];
-	c1 = points[1];
-	for(i = 1; i < npoints; i++){
-		c0 += points[2*i+0];
-		c1 += points[2*i+1];
-	}
-	c[0] = c0 / npoints;
-	c[1] = c1 / npoints;	
-}
-
-static inline int
+static int
 findmaxdst2(short *pt, int npt, int a, int b, int *maxip, int *maxdst2p)
 {
 	int dstp2, dstq2;
@@ -136,7 +121,13 @@ fitpoly(int *poly, int apoly, short *pt, int npt, int dstthr)
 	if(npt < 2)
 		return -1;
 
-	findcenter(pt, npt, cpt);
+	/*
+	 *	in theory, any point should do.
+	 *	using the top-left corner instead of centroid
+	 *	made no visible difference.
+	 */
+	cpt[0] = 0; cpt[1] = 0;
+
 	npoly = 0;
 	for(j = 0; j < 2; j++){
 		maxi = -1;
@@ -181,8 +172,10 @@ fitpoly(int *poly, int apoly, short *pt, int npt, int dstthr)
 		memmove(polymaxdst2+i+1, polymaxdst2+i, (npoly-i) * sizeof polymaxdst2[0]);
 		npoly++;
 
-		pi = (i+npoly-1) % npoly;
-		ni = (i+1) % npoly;
+		pi = (i+npoly-1);
+		pi = pi < npoly ? pi : pi-npoly;
+		ni = i+1;
+		ni = ni < npoly ? ni : ni-npoly;
 		findmaxdst2(pt, npt, poly[pi], poly[i], polymaxi+pi, polymaxdst2+pi);
 		findmaxdst2(pt, npt, poly[i], poly[ni], polymaxi+i, polymaxdst2+i);
 	}
