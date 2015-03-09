@@ -1,7 +1,8 @@
 
 .PHONY: libs
 
-CFLAGS=-O3 -W -Wall
+#CFLAGS=-g
+CFLAGS=-O3 -fomit-frame-pointer -W -Wall
 
 LIBS=\
 	-lX11\
