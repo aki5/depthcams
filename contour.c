@@ -5,24 +5,25 @@
 typedef unsigned int u32int;
 
 void
-initcontour(Contour *cp, uchar *img, int width, int height)
+initcontour(Contour *cp, uchar *img, int width, int height, int st)
 {
 	int i;
 
 	cp->img = img;
 	cp->width = width;
 	cp->height = height;
-	cp->off = width+1;
-	cp->end = width*height-width;
+	cp->stride = st;
+	cp->off = st+1;
+	cp->end = st*(height-1);
 
 	cp->moore[0] = -1;
-	cp->moore[1] = width-1;
-	cp->moore[2] = width;
-	cp->moore[3] = width+1;
+	cp->moore[1] = st-1;
+	cp->moore[2] = st;
+	cp->moore[3] = st+1;
 	cp->moore[4] = 1;
-	cp->moore[5] = -width+1;
-	cp->moore[6] = -width;
-	cp->moore[7] = -width-1;
+	cp->moore[5] = -st+1;
+	cp->moore[6] = -st;
+	cp->moore[7] = -st-1;
 
 	cp->moore[8] = cp->moore[0];
 	cp->moore[9] = cp->moore[1];
@@ -34,10 +35,10 @@ initcontour(Contour *cp, uchar *img, int width, int height)
 	cp->moore[15] = cp->moore[7];
 
 	memset(img, Fcont|Fid, width);
-	memset(img + (height-1)*width, Fcont|Fid,  width);
+	memset(img + (height-1)*width, Fcont|Fid, width);
 	for(i = 1; i < height-1; i++){
-		img[i*width] = Fcont|Fid;
-		img[i*width+width-1] = Fcont|Fid;
+		img[i*st] = Fcont|Fid;
+		img[i*st+width-1] = Fcont|Fid;
 	}
 }
 
@@ -70,6 +71,9 @@ nextcontour(Contour *cp, short *pt, int apt, int fillrule, int *idp)
 	int npt;
 	int width;
 	int fid;
+
+	if(cp->width != cp->stride)
+		abort();
 
 	width = cp->width;
 	img = cp->img;
@@ -181,28 +185,3 @@ nextcontour(Contour *cp, short *pt, int apt, int fillrule, int *idp)
 	return npt;
 }
 
-void
-setcontour(Contour *cp, short *pt, int npt, int bit)
-{
-	uchar *img;
-	int i, off, width;
-	img = cp->img;
-	width = cp->width;
-	for(i = 0; i < npt; i++){
-		off = pt[2*i+1]*width + pt[2*i+0];
-		img[off] |= bit;
-	}
-}
-
-void
-clearcontour(Contour *cp, short *pt, int npt, int bit)
-{
-	uchar *img;
-	int i, off, width;
-	img = cp->img;
-	width = cp->width;
-	for(i = 0; i < npt; i++){
-		off = pt[2*i+1]*width + pt[2*i+0];
-		img[off] &= ~bit;
-	}
-}

@@ -37,12 +37,11 @@ ptreverse(short *pt, int npt)
 }
 
 int
-process_contour(Image *img, Rect clipr, uchar *cimg, int w, int h, uchar *colors)
+process_contour(Image *img, Rect clipr, uchar *cimg, int w, int h, int st, uchar *colors)
 {
 	int i;
 	short *pt;
 	int npt, apt;
-	int cliph;
 
 	Contour contr;
 
@@ -53,16 +52,16 @@ process_contour(Image *img, Rect clipr, uchar *cimg, int w, int h, uchar *colors
 
 	enum { MaxError = 5 };
 
-	cliph = h < height - clipr.y0 ? h : height - clipr.y0;
-	memset(framebuffer + clipr.y0*stride, 0, stride*cliph);
+	/* highlight cracks */
+	drawrect(img, clipr, color(0x00, 0xff, 0x00, 0xff));
 
 	Tess tess[16];
 	for(i = 0; i < nelem(tess); i++)
 		inittess(tess+i);
 
-	initcontour(&contr, cimg, w, h);
+	initcontour(&contr, cimg, w, h, st);
 	int fid;
-	while((npt = nextcontour(&contr, pt, apt, 1, &fid)) != -1){
+	while((npt = nextcontour(&contr, pt, apt, 0, &fid)) != -1){
 		short orig[2] = { -1, -1 };
 		int area;
 		int poly[4096];
@@ -106,12 +105,12 @@ process_contour(Image *img, Rect clipr, uchar *cimg, int w, int h, uchar *colors
 			for(i = 0; i < ntris; i++){
 				//idx2color(j, color);
 				//memcpy(color, poscolor, sizeof color);
-				pt[6*i+0+0] += clipr.x0;
-				pt[6*i+0+1] += clipr.y0;
-				pt[6*i+2+0] += clipr.x0;
-				pt[6*i+2+1] += clipr.y0;
-				pt[6*i+4+0] += clipr.x0;
-				pt[6*i+4+1] += clipr.y0;
+				pt[6*i+0+0] += clipr.u0;
+				pt[6*i+0+1] += clipr.v0;
+				pt[6*i+2+0] += clipr.u0;
+				pt[6*i+2+1] += clipr.v0;
+				pt[6*i+4+0] += clipr.u0;
+				pt[6*i+4+1] += clipr.v0;
 				drawtri(img, clipr, pt+6*i+0, pt+6*i+2, pt+6*i+4, color);
 			}
 			free(pt);
@@ -126,23 +125,25 @@ int
 process_depth(uchar *dmap, int w, int h)
 {
 	int i, j;
+	int st;
 	uchar colors[] = {
 		0x00, 0x00, 0x00, 0xff,
 		0xff, 0xff, 0xff, 0xff
 	};
 	uchar *img;
 
-	img = malloc(w*h);
+	st = w;
+	img = malloc(h*st);
 	for(i = 0; i < h; i++){
 		for(j = 0; j < w; j++){
 			int pix, off;
 			off = i*w+j;
 			pix = getu16(dmap + 2*off);
-			img[off] = (pix > 0) ? 1 : 0;
+			img[i*st+j] = (pix > 0) ? 1 : 0;
 		}
 	}
 
-	process_contour(&screen, rect(0,0,w,h), img, w, h, colors);
+	process_contour(&screen, rect(0,0,w,h), img, w, h, st, colors);
 	free(img);
 	return 0;
 
@@ -188,11 +189,29 @@ clampf(float a, float min, float max)
 	return a;
 }
 
+int
+sobel2(uchar *buf, int x, int y, int st)
+{
+	int off;
+	int lx, ly;
+
+	off = y*st+2*x;
+
+	lx = -1*buf[off]		+	buf[off+4] +
+		-2*buf[off+st]		+	2*buf[off+st+4] +
+		-1*buf[off+2*st]	+	buf[off+2*st+4];
+
+	ly = buf[off]			+	2*buf[off+2]		+ buf[off+4] +
+		-1*buf[off+2*st]	+	-2*buf[off+2*st+2]	+ -1*buf[off+2*st+4];
+
+	return lx*lx + ly*ly;
+}
+
 void
 process_color(uchar *buf, int w, int h)
 {
-	enum { Ncolors = 16 };
-	int i, j;
+	enum { Ncolors = 8 };
+	int i, j, st;
 	uchar *img;
 	uchar colors[Ncolors*4];
 
@@ -203,18 +222,18 @@ process_color(uchar *buf, int w, int h)
 		colors[4*i+3] = 0xff;
 	}
 
-	img = malloc(w*h);
+	st = w;
+	img = malloc(h*st);
 	for(i = 0; i < h; i++){
 		for(j = 0; j < w; j++){
 			int pix, off;
 			off = i*w+j;
-			//pix = average(buf, j, i, 2*w);
 			pix = buf[2*off];
-			img[off] = ((Ncolors-1)*pix)/255;
+			img[i*st+j] = ((Ncolors-1)*pix)/255;
 		}
 	}
 
-	process_contour(&screen, rect(0,480,w,480+h), img, w, h, colors);
+	process_contour(&screen, rect(0,480,w,480+h), img, w, h, st, colors);
 	free(img);
 	return;
 

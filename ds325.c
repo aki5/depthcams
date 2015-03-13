@@ -665,8 +665,6 @@ main(int argc, char *argv[])
 	int dutycycle = -1;
 	int fps = 60;
 
-
-
 	while((opt = getopt(argc, argv, "d:c:m:i:f:")) != -1){
 		switch (opt) {
 		case 'f':
@@ -786,10 +784,12 @@ main(int argc, char *argv[])
 			drawflush();
 
 		if(draw_fd != -1){
-			int r;
-			r = drawhandle(draw_fd, 0);
-			if(r & 4)
-				bugger = 0;
+			if(drawhandle(draw_fd, 0)){
+				Input *inp, *inep;
+				for(inp = getinputs(&inep); inp < inep; inp++)
+					if((inp->begin & KeyStr) && inp->str[0] == 'q')
+						exit(0);
+			}
 		}
 
 
